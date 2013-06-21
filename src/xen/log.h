@@ -32,6 +32,8 @@
 #ifndef _XEN_LOG_H
 #define _XEN_LOG_H
 
+#define __MODULE__ "XEN"
+
 #include <ntddk.h>
 #include <stdarg.h>
 

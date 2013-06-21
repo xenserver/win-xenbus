@@ -314,6 +314,7 @@ __FdoEnumerate(
 
     // Walk the list and create PDO filters for any new devices
     for (Index = 0; Index < Count; Index++) {
+#pragma warning(suppress:6385)  // Reading invalid data from 'PhysicalDeviceObject'
         if (PhysicalDeviceObject[Index] != NULL) {
             (VOID) PdoCreate(Fdo, PhysicalDeviceObject[Index]);
             ObDereferenceObject(PhysicalDeviceObject[Index]);

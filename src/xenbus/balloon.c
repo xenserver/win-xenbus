@@ -506,10 +506,12 @@ __BalloonReleasePfnArray(
         status = RangeSetPut(Balloon->RangeSet,
                              (ULONGLONG)Balloon->PfnArray[Index],
                              (ULONGLONG)Balloon->PfnArray[Next]);
-        ASSERT(NT_SUCCESS(status));
+        if (!NT_SUCCESS(status))
+            break;
 
         Index = Next + 1;
     }
+    Requested = Index;
 
     Count = __BalloonDecreaseReservation(Requested, Balloon->PfnArray);
 
@@ -627,7 +629,7 @@ BalloonDeflate(
     Count = 0;
     Abort = FALSE;
 
-    while (Count < Requested) {
+    while (Count < Requested && !Abort) {
         ULONG   ThisTime = (ULONG)__min(Requested - Count, BALLOON_PFN_ARRAY_SIZE);
         ULONG   Populated;
         ULONG   Freed;

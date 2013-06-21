@@ -32,6 +32,8 @@
 #ifndef _XENFILT_LOG_H
 #define _XENFILT_LOG_H
 
+#define __MODULE__ "XENFILT"
+
 #include <ntddk.h>
 #include <stdarg.h>
 

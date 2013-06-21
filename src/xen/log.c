@@ -178,10 +178,10 @@ LogCchVPrintf(
             ASSERT(Character != '\0');
         }
 
-        if (isdigit(Character)) {
+        if (isdigit((unsigned char)Character)) {
             ZeroPrefix = (Character == '0') ? TRUE : FALSE;
 
-            while (isdigit(Character)) {
+            while (isdigit((unsigned char)Character)) {
                 Pad = (Pad * 10) + (Character - '0');
                 Character = *Format++;
                 ASSERT(Character != '\0');

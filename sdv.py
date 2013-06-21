@@ -18,32 +18,49 @@ def shell(command):
 
     return pipe.close()
 
-
 class msbuild_failure(Exception):
     def __init__(self, value):
         self.value = value
     def __str__(self):
         return repr(self.value)
 
-def msbuild(batfile, projdir, name, sdv_arg):
+def msbuild(name, target, sdv_arg):
     cwd = os.getcwd()
 
-    os.environ['CONFIGURATION'] = 'Windows Developer Preview Release'
-    os.environ['SDV_PROJ'] = name
-    os.environ['SDV_ARG'] = sdv_arg
+    os.environ['CONFIGURATION'] = 'Windows 8 Release'
+    os.environ['PLATFORM'] = 'x64'
+    os.environ['TARGET'] = target
+    os.environ['BUILD_FILE'] = name + '.vcxproj'
+    os.environ['BUILD_ARGS'] = sdv_arg
 
     os.chdir('proj')
-    os.chdir(projdir)
-    status = shell(batfile)
+    os.chdir(name)
+    status = shell('..\\msbuild.bat')
     os.chdir(cwd)
 
 #    if (status != None):
 #        raise msbuild_failure(sdv_arg)
 
+def archive(filename, files, tgz=False):
+    access='w'
+    if tgz:
+        access='w:gz'
+    tar = tarfile.open(filename, access)
+    for name in files :
+        try:
+            print('adding '+name)
+            tar.add(name)
+        except:
+            pass
+    tar.close()
 
 if __name__ == '__main__':
-    msbuild('..\msbuild_sdv.bat', 'xenbus', 'xenbus.vcxproj', '/clean')
-
-    msbuild('..\msbuild_sdv.bat', 'xenbus', 'xenbus.vcxproj', '/check:default.sdv')
-
-    msbuild('..\msbuild_dvl.bat', 'xenbus', 'xenbus.vcxproj', '')
+    msbuild('xen', 'sdv', '/p:Inputs="/clean"')
+    msbuild('xenfilt', 'sdv', '/p:Inputs="/clean"')
+    msbuild('xenbus', 'sdv', '/p:Inputs="/clean"')
+    msbuild('xen', 'sdv', '/p:Inputs="/check:default.sdv"')
+    msbuild('xenfilt', 'sdv', '/p:Inputs="/check:default.sdv"')
+    msbuild('xenbus', 'sdv', '/p:Inputs="/check:default.sdv"')
+    msbuild('xen', 'dvl', '')
+    msbuild('xenfilt', 'dvl', '')
+    msbuild('xenbus', 'dvl', '')

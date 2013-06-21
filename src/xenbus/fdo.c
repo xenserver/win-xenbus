@@ -118,6 +118,34 @@ __FdoFree(
     __FreePoolWithTag(Buffer, FDO_TAG);
 }
 
+#pragma warning(push)
+#pragma warning(disable: 28230)
+#pragma warning(disable: 28285)
+
+_IRQL_requires_max_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+_IRQL_saves_
+_IRQL_raises_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+static FORCEINLINE KIRQL
+__AcquireInterruptLock(
+    _Inout_ PKINTERRUPT             Interrupt
+    )
+{
+    return KeAcquireInterruptSpinLock(Interrupt);
+}
+
+_IRQL_requires_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+static FORCEINLINE VOID
+__ReleaseInterruptLock(
+    _Inout_ PKINTERRUPT             Interrupt,
+    _In_ _IRQL_restores_ KIRQL      Irql
+    )
+{
+#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
+    KeReleaseInterruptSpinLock(Interrupt, Irql);
+}
+
+#pragma warning(pop)
+
 static FORCEINLINE VOID
 __FdoSetDevicePnpState(
     IN  PXENBUS_FDO         Fdo,
@@ -947,6 +975,7 @@ FdoBalloon(
     PXENBUS_FDO         Fdo = Context;
     PKEVENT             Event;
     BOOLEAN             Active;
+    static ULONGLONG    Maximum;    // Should never change in the lifetime of the VM
     NTSTATUS            status;
 
     Trace("====>\n");
@@ -957,7 +986,6 @@ FdoBalloon(
 
     for (;;) {
         PCHAR       Buffer;
-        ULONGLONG   Maximum;
         ULONGLONG   Target;
         BOOLEAN     AllowInflation;
         BOOLEAN     AllowDeflation;
@@ -983,19 +1011,21 @@ FdoBalloon(
         if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0)
             goto loop;
 
-        status = STORE(Read,
-                       &Fdo->StoreInterface,
-                       NULL,
-                       "memory",
-                       "static-max",
-                       &Buffer);
-        if (!NT_SUCCESS(status))
-            goto loop;
+        if (Maximum == 0) {
+            status = STORE(Read,
+                           &Fdo->StoreInterface,
+                           NULL,
+                           "memory",
+                           "static-max",
+                           &Buffer);
+            if (!NT_SUCCESS(status))
+                goto loop;
 
-        Maximum = _strtoui64(Buffer, NULL, 10) / 4;
-        STORE(Free,
-              &Fdo->StoreInterface,
-              Buffer);
+            Maximum = _strtoui64(Buffer, NULL, 10) / 4;
+            STORE(Free,
+                  &Fdo->StoreInterface,
+                  Buffer);
+        }
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -1314,11 +1344,10 @@ __FdoEnableInterrupt(
 
     InterruptObject = __FdoGetInterruptObject(Fdo);
 
-    Irql = KeAcquireInterruptSpinLock(InterruptObject);
+    Irql = __AcquireInterruptLock(InterruptObject);
     Fdo->InterruptEnabled = TRUE;
 
-#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(InterruptObject, Irql);
+    __ReleaseInterruptLock(InterruptObject, Irql);
 }
     
 static FORCEINLINE VOID
@@ -1331,11 +1360,10 @@ __FdoDisableInterrupt(
 
     InterruptObject = __FdoGetInterruptObject(Fdo);
 
-    Irql = KeAcquireInterruptSpinLock(InterruptObject);
+    Irql = __AcquireInterruptLock(InterruptObject);
     Fdo->InterruptEnabled = FALSE;
 
-#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(InterruptObject, Irql);
+    __ReleaseInterruptLock(InterruptObject, Irql);
 }
 
 PXENBUS_DEBUG_INTERFACE

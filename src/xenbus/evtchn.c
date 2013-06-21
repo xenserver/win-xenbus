@@ -114,6 +114,34 @@ __EvtchnFree(
     __FreePoolWithTag(Buffer, EVTCHN_TAG);
 }
 
+#pragma warning(push)
+#pragma warning(disable: 28230)
+#pragma warning(disable: 28285)
+
+_IRQL_requires_max_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+_IRQL_saves_
+_IRQL_raises_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+static FORCEINLINE KIRQL
+__AcquireInterruptLock(
+    _Inout_ PKINTERRUPT             Interrupt
+    )
+{
+    return KeAcquireInterruptSpinLock(Interrupt);
+}
+
+_IRQL_requires_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
+static FORCEINLINE VOID
+__ReleaseInterruptLock(
+    _Inout_ PKINTERRUPT             Interrupt,
+    _In_ _IRQL_restores_ KIRQL      Irql
+    )
+{
+#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
+    KeReleaseInterruptSpinLock(Interrupt, Irql);
+}
+
+#pragma warning(pop)
+
 static FORCEINLINE NTSTATUS
 __EvtchnOpenFixed(
     IN  PXENBUS_EVTCHN_DESCRIPTOR   Descriptor,
@@ -292,7 +320,7 @@ EvtchnOpen(
 
     LocalPort = Descriptor->LocalPort;
 
-    (VOID) KeAcquireInterruptSpinLock(Context->InterruptObject);
+    (VOID) __AcquireInterruptLock(Context->InterruptObject);
 
     ASSERT3P(Context->Descriptor[LocalPort], ==, NULL);
     Context->Descriptor[LocalPort] = Descriptor;
@@ -300,8 +328,7 @@ EvtchnOpen(
 
     InsertTailList(&Context->List, &Descriptor->ListEntry);
 
-#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(Context->InterruptObject, DISPATCH_LEVEL);
+    __ReleaseInterruptLock(Context->InterruptObject, DISPATCH_LEVEL);
 
     KeLowerIrql(Irql);
 
@@ -341,7 +368,7 @@ EvtchnUnmask(
     BOOLEAN                         Pending;
 
     if (!Locked)
-        Irql = KeAcquireInterruptSpinLock(Context->InterruptObject);
+        Irql = __AcquireInterruptLock(Context->InterruptObject);
 
     if (Descriptor->Active) {
         Pending = SHARED_INFO(EvtchnUnmask,
@@ -382,7 +409,7 @@ EvtchnUnmask(
 
     if (!Locked)
 #pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-        KeReleaseInterruptSpinLock(Context->InterruptObject, Irql);
+        __ReleaseInterruptLock(Context->InterruptObject, Irql);
 
     return Pending;
 }
@@ -443,7 +470,7 @@ EvtchnTrigger(
     KIRQL                           Irql;
     BOOLEAN                         DoneSomething;
 
-    Irql = KeAcquireInterruptSpinLock(Context->InterruptObject);
+    Irql = __AcquireInterruptLock(Context->InterruptObject);
 
     if (Descriptor->Active) {
         DoneSomething = __EvtchnCallback(Context, Descriptor);
@@ -453,7 +480,7 @@ EvtchnTrigger(
     }
 
 #pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(Context->InterruptObject, Irql);
+    __ReleaseInterruptLock(Context->InterruptObject, Irql);
 
     return DoneSomething;
 }
@@ -466,7 +493,7 @@ EvtchnClose(
 {
     KIRQL                           Irql;
 
-    Irql = KeAcquireInterruptSpinLock(Context->InterruptObject);
+    Irql = __AcquireInterruptLock(Context->InterruptObject);
 
     RemoveEntryList(&Descriptor->ListEntry);
     RtlZeroMemory(&Descriptor->ListEntry, sizeof (LIST_ENTRY));
@@ -488,7 +515,7 @@ EvtchnClose(
     }
 
 #pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(Context->InterruptObject, Irql);
+    __ReleaseInterruptLock(Context->InterruptObject, Irql);
 
     Descriptor->LocalPort = 0;
     RtlZeroMemory(&Descriptor->Parameters, sizeof (EVTCHN_PARAMETERS));

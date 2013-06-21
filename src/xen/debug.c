@@ -51,6 +51,10 @@ DebugTeardown(
     (VOID) KeDeregisterBugCheckCallback(&DebugBugCheckCallbackRecord);
 }
 
+#pragma warning(push)
+#pragma warning(disable: 6320) // Exception-filter expression is the constant EXCEPTION_EXECUTE_HANDLER. This might mask exceptions that were not intended to be handled.
+#pragma warning(disable: 6322) // Empty _except block.
+
 static DECLSPEC_NOINLINE VOID
 DebugDumpExceptionRecord(
     IN  PEXCEPTION_RECORD   Exception
@@ -878,6 +882,8 @@ DebugDefaultHandler(
         // Error of some kind
     }
 }
+
+#pragma warning(pop)
 
 KBUGCHECK_CALLBACK_ROUTINE DebugBugCheckCallback;
 

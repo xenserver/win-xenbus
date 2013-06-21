@@ -286,6 +286,7 @@ static PXENBUS_DMA_CONTEXT  DmaContext[NR_CONTEXT_BUCKETS];
 #define DMA_CONTEXT_BUCKET(_Key)    \
     (((ULONG_PTR)(_Key) >> 8) % NR_CONTEXT_BUCKETS)
 
+#pragma warning(suppress: 28167) // changes the IRQL and does not restore the IRQL before it exits
 static FORCEINLINE  KIRQL
 __DmaAcquireLock(
     IN  PKSPIN_LOCK         Lock
@@ -301,6 +302,7 @@ __DmaAcquireLock(
     return Irql;
 }
 
+#pragma warning(suppress: 28167) // changes the IRQL and does not restore the IRQL before it exits
 static FORCEINLINE  VOID
 __DmaReleaseLock(
     IN  PKSPIN_LOCK         Lock,
@@ -336,10 +338,13 @@ __DmaRemoveContext(
     IN  PXENBUS_DMA_CONTEXT Context
     )
 {
-    PVOID                   Key = Context->Key;
+    PVOID                   Key;
     KIRQL                   Irql;
     ULONG_PTR               Bucket;
     PXENBUS_DMA_CONTEXT     *Entry;
+
+    ASSERT(Context != NULL);
+    Key = Context->Key;
 
     Irql = __DmaAcquireLock(&DmaContextLock);
     Bucket = DMA_CONTEXT_BUCKET(Key);

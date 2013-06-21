@@ -42,7 +42,7 @@
 // To enable you need to customize /opt/xensource/libexec/qemu-dm-wrapper in dom0 to add the following
 // arguments to the qemu command line:
 //
-// -priv -dumpdir <directory> -dumpquota <quota>
+// -dumpdir <directory> -dumpquota <quota>
 //
 // <directory> is best pointed at an empty directory. Files will be created with numeric names starting at 0.
 // <quota> should be the total size in MB of all possible crash dump files. I.e. once sufficient crash dumps have
@@ -159,7 +159,7 @@ DumpBugCheckReasonCallback(
     PKBUGCHECK_DUMP_IO                      DumpIo = (PKBUGCHECK_DUMP_IO)ReasonSpecificData;
 
     UNREFERENCED_PARAMETER(ReasonSpecificDataLength);
-    
+
     ASSERT3U(Reason, ==, KbCallbackDumpIo);
     ASSERT3P(Record, ==, &DumpBugCheckReasonCallbackRecord);
     ASSERT(DumpIo != NULL);

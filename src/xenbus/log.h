@@ -32,6 +32,8 @@
 #ifndef _XENBUS_LOG_H
 #define _XENBUS_LOG_H
 
+#define __MODULE__ "XENBUS"
+
 #include <ntddk.h>
 #include <stdarg.h>
 
