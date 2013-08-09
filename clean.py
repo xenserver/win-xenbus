@@ -2,7 +2,7 @@
 
 import os, sys
 
-file = os.popen('hg status')
+file = os.popen('git status -u --porcelain')
 
 for line in file:
     item = line.split(' ')

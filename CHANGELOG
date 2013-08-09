@@ -1,2 +1,7 @@
 7.0.0 (2013-06-19):
 * Initial public release
+
+7.1.0 (2013-08-09):
+* Update minor number to disambiguate new builds from builds of the
+  old mercurial repo.
+
