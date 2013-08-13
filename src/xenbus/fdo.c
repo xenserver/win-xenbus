@@ -2539,12 +2539,12 @@ FdoDeviceUsageNotification(
              DeviceUsageTypeName(Type));
         Fdo->Usage[Type]++;
     } else {
-        ASSERT(Fdo->Usage[Type] != 0);
-
-        Info("%s: REMOVING %s\n",
-             __FdoGetName(Fdo),
-             DeviceUsageTypeName(Type));
-        --Fdo->Usage[Type];
+        if (Fdo->Usage[Type] != 0) {
+            Info("%s: REMOVING %s\n",
+                 __FdoGetName(Fdo),
+                 DeviceUsageTypeName(Type));
+            --Fdo->Usage[Type];
+        }
     }
 
     status = FdoForwardIrpSynchronously(Fdo, Irp);
