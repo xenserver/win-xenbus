@@ -38,8 +38,7 @@
 #include "dma.h"
 #include "fdo.h"
 #include "pdo.h"
-#include "log.h"
-#include "sync.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #pragma warning(push)

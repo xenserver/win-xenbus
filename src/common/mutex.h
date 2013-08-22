@@ -29,18 +29,54 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XEN_DEBUG_H
-#define _XEN_DEBUG_H
+#ifndef _COMMON_MUTEX_H
+#define _COMMON_MUTEX_H
 
 #include <ntddk.h>
 
-extern NTSTATUS
-DebugInitialize(
-    VOID);
+#include "assert.h"
 
-extern VOID
-DebugTeardown(
-    VOID
-    );
+typedef struct _MUTEX {
+    PKTHREAD    Owner;
+    KEVENT      Event;
+} MUTEX, *PMUTEX;
 
-#endif  // _XEN_DEBUG_H
+static FORCEINLINE VOID
+InitializeMutex(
+    IN  PMUTEX  Mutex
+    )
+{
+    RtlZeroMemory(Mutex, sizeof (MUTEX));
+
+    KeInitializeEvent(&Mutex->Event, SynchronizationEvent, TRUE);
+}
+
+static FORCEINLINE VOID
+__drv_maxIRQL(PASSIVE_LEVEL)
+AcquireMutex(
+    IN  PMUTEX  Mutex
+    )
+{
+    (VOID) KeWaitForSingleObject(&Mutex->Event,
+                                 Executive,
+                                 KernelMode,
+                                 FALSE,
+                                 NULL);
+
+    ASSERT3P(Mutex->Owner, ==, NULL);
+    Mutex->Owner = KeGetCurrentThread();
+}
+
+static FORCEINLINE VOID
+__drv_maxIRQL(PASSIVE_LEVEL)
+ReleaseMutex(
+    IN  PMUTEX  Mutex
+    )
+{
+    ASSERT3P(Mutex->Owner, ==, KeGetCurrentThread());
+    Mutex->Owner = NULL;
+
+    KeSetEvent(&Mutex->Event, IO_NO_INCREMENT, FALSE);
+}
+
+#endif  // _COMMON_MUTEX_H

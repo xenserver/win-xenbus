@@ -33,7 +33,6 @@
 #include <util.h>
 
 #include "registry.h"
-#include "log.h"
 #include "assert.h"
 
 #define REGISTRY_POOL 'GERX'
@@ -229,7 +228,7 @@ RegistryCreateSubKey(
                          &Attributes,
                          0,
                          NULL,
-                         REG_OPTION_VOLATILE,
+                         REG_OPTION_NON_VOLATILE,
                          NULL
                          );
     if (!NT_SUCCESS(status))
@@ -789,6 +788,117 @@ fail4:
 fail3:
 fail2:
     RtlFreeUnicodeString(&Unicode);
+
+fail1:
+    return status;
+}
+
+NTSTATUS
+RegistryQuerySystemStartOption(
+    IN  PCHAR                       Prefix,
+    OUT PANSI_STRING                *Value
+    )
+{
+    UNICODE_STRING                  Unicode;
+    OBJECT_ATTRIBUTES               Attributes;
+    HANDLE                          Key;
+    PKEY_VALUE_PARTIAL_INFORMATION  Partial;
+    ULONG                           Size;
+    ANSI_STRING                     Ansi;
+    PWCHAR                          Option;
+    PWCHAR                          Context;
+    NTSTATUS                        status;
+
+    RtlInitUnicodeString(&Unicode, L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control");
+    
+    InitializeObjectAttributes(&Attributes,
+                               &Unicode,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    status = ZwOpenKey(&Key,
+                       KEY_READ,
+                       &Attributes);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    RtlInitUnicodeString(&Unicode, L"SystemStartOptions");
+
+    status = ZwQueryValueKey(Key,
+                             &Unicode,
+                             KeyValuePartialInformation,
+                             NULL,
+                             0,
+                             &Size);
+    if (status != STATUS_BUFFER_TOO_SMALL)
+        goto fail2;
+
+    Partial = __RegistryAllocate(Size);
+
+    status = STATUS_NO_MEMORY;
+    if (Partial == NULL)
+        goto fail3;
+
+    status = ZwQueryValueKey(Key,
+                             &Unicode,
+                             KeyValuePartialInformation,
+                             Partial,
+                             Size,
+                             &Size);
+    if (!NT_SUCCESS(status))
+        goto fail4;
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Partial->Type != REG_SZ)
+        goto fail5;
+
+    RtlInitAnsiString(&Ansi, Prefix);
+
+    status = RtlAnsiStringToUnicodeString(&Unicode, &Ansi, TRUE);
+    if (!NT_SUCCESS(status))
+        goto fail6;
+
+    // SystemStartOptions is a space separated list of options.
+    // Scan it looking for the one we want.
+    Option = __wcstok_r((PWCHAR)Partial->Data, L" ", &Context);
+    if (wcsncmp(Option, Unicode.Buffer, Unicode.Length / sizeof (WCHAR)) == 0)
+        goto found;
+
+    while ((Option = __wcstok_r(NULL, L" ", &Context)) != NULL)
+        if (wcsncmp(Option, Unicode.Buffer, Unicode.Length / sizeof (WCHAR)) == 0)
+            goto found;
+
+    status = STATUS_OBJECT_NAME_NOT_FOUND;
+    goto fail7;
+
+found:
+    *Value = RegistrySzToAnsi(Option);
+
+    status = STATUS_NO_MEMORY;
+    if (*Value == NULL)
+        goto fail8;
+
+    __RegistryFree(Partial);
+
+    RtlFreeUnicodeString(&Unicode);
+
+    ZwClose(Key);
+
+    return STATUS_SUCCESS;
+
+fail8:
+fail7:
+    RtlFreeUnicodeString(&Unicode);
+
+fail6:
+fail5:
+fail4:
+    __RegistryFree(Partial);
+
+fail3:
+fail2:
+    ZwClose(Key);
 
 fail1:
     return status;

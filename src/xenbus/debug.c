@@ -39,7 +39,7 @@
 #include "high.h"
 #include "debug.h"
 #include "fdo.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define MAXIMUM_PREFIX_LENGTH   32
@@ -136,10 +136,14 @@ DebugPrintf(
 
     UNREFERENCED_PARAMETER(Context);
 
-    LogQemuPrintf("%s: ", Callback->Prefix);
+    LogPrintf(LOG_LEVEL_INFO,
+              "%s: ",
+              Callback->Prefix);
 
     va_start(Arguments, Format);
-    LogQemuVPrintf(Format, Arguments);
+    LogVPrintf(LOG_LEVEL_INFO,
+               Format,
+               Arguments);
     va_end(Arguments);
 }
 
@@ -207,21 +211,29 @@ __DebugTrigger(
             ModuleLookup((ULONG_PTR)Callback->Caller, &Name, &Offset);
 
             if (Name != NULL) {
-                LogQemuPrintf("XEN|DEBUG: SKIPPING %p PREFIX '%s' REGISTERED BY %s + %p\n",
-                            Callback->Function,
-                            Callback->Prefix,
-                            Name,
-                            Offset);
+                LogPrintf(LOG_LEVEL_INFO,
+                          "XEN|DEBUG: SKIPPING %p PREFIX '%s' REGISTERED BY %s + %p\n",
+                          Callback->Function,
+                          Callback->Prefix,
+                          Name,
+                          Offset);
             } else {
-                LogQemuPrintf("XEN|DEBUG: SKIPPING %p PREFIX '%s' REGISTERED BY %p\n",
-                            Callback->Function,
-                            Callback->Prefix,
-                            Callback->Caller);
+                LogPrintf(LOG_LEVEL_INFO,
+                          "XEN|DEBUG: SKIPPING %p PREFIX '%s' REGISTERED BY %p\n",
+                          Callback->Function,
+                          Callback->Prefix,
+                          Callback->Caller);
             }
         } else {
-            LogQemuPrintf("XEN|DEBUG: ====> (%s + %p)\n", Name, Offset);
+            LogPrintf(LOG_LEVEL_INFO,
+                      "XEN|DEBUG: ====> (%s + %p)\n",
+                      Name,
+                      Offset);
             Callback->Function(Callback->Argument, Crashing);
-            LogQemuPrintf("XEN|DEBUG: <==== (%s + %p)\n", Name, Offset);
+            LogPrintf(LOG_LEVEL_INFO,
+                      "XEN|DEBUG: <==== (%s + %p)\n",
+                      Name,
+                      Offset);
         }
     }
 }

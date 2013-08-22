@@ -38,9 +38,8 @@
 
 #include "store.h"
 #include "evtchn.h"
-#include "debug.h"
 #include "fdo.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define STORE_TRANSACTION_MAGIC 'NART'

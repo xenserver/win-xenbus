@@ -24,7 +24,7 @@
 	<Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" /> 
 
 	<PropertyGroup>
-		<IncludePath>..\..\include;$(IncludePath)</IncludePath>
+		<IncludePath>..\..\include;..\..\src\common;$(IncludePath)</IncludePath>
 		<RunCodeAnalysis>true</RunCodeAnalysis>
 		<EnableInf2cat>false</EnableInf2cat>
 		<IntDir>..\$(ProjectName)\$(ConfigurationName)\$(Platform)\</IntDir>
@@ -74,11 +74,10 @@
 		<FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
 	</ItemGroup>
 	<ItemGroup>
+		<ClCompile Include="../../src/common/registry.c" />
 		<ClCompile Include="../../src/xenfilt/driver.c" />
 		<ClCompile Include="../../src/xenfilt/fdo.c" />
-		<ClCompile Include="../../src/xenfilt/emulated.c" />
 		<ClCompile Include="../../src/xenfilt/pdo.c" />
-		<ClCompile Include="../../src/xenfilt/registry.c" />
 		<ClCompile Include="../../src/xenfilt/thread.c" />
 	</ItemGroup>
 	<ItemGroup>

@@ -37,8 +37,8 @@
 #include "suspend.h"
 #include "thread.h"
 #include "fdo.h"
-#include "log.h"
 #include "sync.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 struct _XENBUS_SUSPEND_CALLBACK {
@@ -188,14 +188,18 @@ SuspendTrigger(
 
     KeAcquireSpinLock(&Context->Lock, &Irql);
 
-    LogQemuPrintf("SUSPEND: ====>\n");
+    LogPrintf(LOG_LEVEL_INFO,
+              "SUSPEND: ====>\n");
 
     SyncCapture();
     SyncDisableInterrupts();
 
-    LogQemuPrintf("SUSPEND: SCHEDOP_shutdown:SHUTDOWN_suspend ====>\n");
+    LogPrintf(LOG_LEVEL_INFO,
+              "SUSPEND: SCHEDOP_shutdown:SHUTDOWN_suspend ====>\n");
     status = SchedShutdown(SHUTDOWN_suspend);
-    LogQemuPrintf("SUSPEND: SCHEDOP_shutdown:SHUTDOWN_suspend <==== (%08x)\n", status);
+    LogPrintf(LOG_LEVEL_INFO,
+              "SUSPEND: SCHEDOP_shutdown:SHUTDOWN_suspend <==== (%08x)\n",
+              status);
 
     if (NT_SUCCESS(status)) {
         PLIST_ENTRY ListEntry;
@@ -217,9 +221,6 @@ SuspendTrigger(
     if (NT_SUCCESS(status)) {
         PLIST_ENTRY ListEntry;
 
-        // Make sure that emulated devices don't magically re-appear
-        UnplugReplay();
-
         for (ListEntry = Context->LateList.Flink;
              ListEntry != &Context->LateList;
              ListEntry = ListEntry->Flink) {
@@ -232,7 +233,7 @@ SuspendTrigger(
 
     SyncRelease();
 
-    LogQemuPrintf("SUSPEND: <====\n");
+    LogPrintf(LOG_LEVEL_INFO, "SUSPEND: <====\n");
 
     KeReleaseSpinLock(&Context->Lock, Irql);
 }

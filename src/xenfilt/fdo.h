@@ -34,8 +34,6 @@
 
 #include <ntddk.h>
 
-#include <emulated_interface.h>
-
 #include "types.h"
 
 typedef struct _XENFILT_FDO XENFILT_FDO, *PXENFILT_FDO;

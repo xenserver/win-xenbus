@@ -32,112 +32,27 @@
 #ifndef _XEN_LOG_H
 #define _XEN_LOG_H
 
-#define __MODULE__ "XEN"
+#include <xen.h>
 
-#include <ntddk.h>
-#include <stdarg.h>
+typedef struct _LOG_DISPOSITION LOG_DISPOSITION, *PLOG_DISPOSITION;
 
-#pragma warning(disable:4127)   // conditional expression is constant
-
-static __inline VOID
-__Error(
-    IN  const CHAR  *Prefix,
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-
-#pragma prefast(suppress:6001) // Using uninitialized memory
-    vDbgPrintExWithPrefix(Prefix,
-                          DPFLTR_IHVDRIVER_ID,
-                          DPFLTR_ERROR_LEVEL,
-                          Format,
-                          Arguments);
-    va_end(Arguments);
-}
-
-#define Error(...)  \
-        __Error(__MODULE__ "|" __FUNCTION__ ": ", __VA_ARGS__)
-
-static __inline VOID
-__Warning(
-    IN  const CHAR  *Prefix,
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-
-#pragma prefast(suppress:6001) // Using uninitialized memory
-    vDbgPrintExWithPrefix(Prefix,
-                          DPFLTR_IHVDRIVER_ID,
-                          DPFLTR_WARNING_LEVEL,
-                          Format,
-                          Arguments);
-    va_end(Arguments);
-}
-
-#define Warning(...)  \
-        __Warning(__MODULE__ "|" __FUNCTION__ ": ", __VA_ARGS__)
-
-#if DBG
-static __inline VOID
-__Trace(
-    IN  const CHAR  *Prefix,
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-
-#pragma prefast(suppress:6001) // Using uninitialized memory
-    vDbgPrintExWithPrefix(Prefix,
-                          DPFLTR_IHVDRIVER_ID,
-                          DPFLTR_TRACE_LEVEL,
-                          Format,
-                          Arguments);
-    va_end(Arguments);
-}
-
-#define Trace(...)  \
-        __Trace(__MODULE__ "|" __FUNCTION__ ": ", __VA_ARGS__)
-#else   // DBG
-#define Trace(...)  (VOID)(__VA_ARGS__)
-#endif  // DBG
-
-static __inline VOID
-__Info(
-    IN  const CHAR  *Prefix,
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-
-#pragma prefast(suppress:6001) // Using uninitialized memory
-    vDbgPrintExWithPrefix(Prefix,
-                          DPFLTR_IHVDRIVER_ID,
-                          DPFLTR_INFO_LEVEL,
-                          Format,
-                          Arguments);
-    va_end(Arguments);
-}
-
-#define Info(...)  \
-        __Info(__MODULE__ "|"  __FUNCTION__ ": ", __VA_ARGS__)
+extern NTSTATUS
+LogAddDisposition(
+    IN  LOG_LEVEL           Mask,
+    IN  VOID                (*Function)(PVOID, PCHAR, ULONG),
+    IN  PVOID               Argument OPTIONAL,
+    OUT PLOG_DISPOSITION    *Disposition
+    );
 
 extern VOID
+LogRemoveDisposition(
+    IN  PLOG_DISPOSITION    Disposition
+    );
+
+extern NTSTATUS
 LogInitialize(
-    VOID);
+    VOID
+    );
 
 extern VOID
 LogTeardown(

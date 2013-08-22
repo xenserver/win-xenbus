@@ -37,8 +37,8 @@
 #include "mutex.h"
 #include "balloon.h"
 #include "range_set.h"
+#include "dbg_print.h"
 #include "assert.h"
-#include "log.h"
 
 #define BALLOON_AUDIT   DBG
 
@@ -53,7 +53,7 @@ struct _XENBUS_BALLOON
 {
     PKEVENT             LowMemoryEvent;
     HANDLE              LowMemoryHandle;
-    XENBUS_MUTEX        Mutex;
+    MUTEX               Mutex;
     ULONGLONG           Size;
     PXENBUS_RANGE_SET   RangeSet;
     MDL                 Mdl;
@@ -814,7 +814,7 @@ BalloonInitialize(
 fail3:
     Error("fail3\n");
 
-    RtlZeroMemory(&(*Balloon)->Mutex, sizeof (XENBUS_MUTEX));
+    RtlZeroMemory(&(*Balloon)->Mutex, sizeof (MUTEX));
 
 fail2:
     Error("fail2\n");
@@ -837,7 +837,7 @@ BalloonTeardown(
     Balloon->LowMemoryHandle = NULL;
     Balloon->LowMemoryEvent = NULL;
 
-    RtlZeroMemory(&Balloon->Mutex, sizeof (XENBUS_MUTEX));
+    RtlZeroMemory(&Balloon->Mutex, sizeof (MUTEX));
 
     RangeSetTeardown(Balloon->RangeSet);
     Balloon->RangeSet = NULL;

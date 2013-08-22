@@ -24,7 +24,7 @@
 	<Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" /> 
 
 	<PropertyGroup>
-		<IncludePath>..\..\include;$(IncludePath)</IncludePath>
+		<IncludePath>..\..\include;..\..\src\common;$(IncludePath)</IncludePath>
 		<RunCodeAnalysis>true</RunCodeAnalysis>
 		<EnableInf2cat>false</EnableInf2cat>
 		<IntDir>..\$(ProjectName)\$(ConfigurationName)\$(Platform)\</IntDir>
@@ -74,6 +74,7 @@
 		<FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
 	</ItemGroup>
 	<ItemGroup>
+		<ClCompile Include="..\..\src\common\registry.c" />
 		<ClCompile Include="..\..\src\xenbus\bus.c" />
 		<ClCompile Include="..\..\src\xenbus\dma.c" />
 		<ClCompile Include="..\..\src\xenbus\debug.c" />
@@ -82,7 +83,6 @@
 		<ClCompile Include="..\..\src\xenbus\fdo.c" />
 		<ClCompile Include="..\..\src\xenbus\gnttab.c" />
 		<ClCompile Include="..\..\src\xenbus\pdo.c" />
-		<ClCompile Include="..\..\src\xenbus\registry.c" />
 		<ClCompile Include="..\..\src\xenbus\shared_info.c" />
 		<ClCompile Include="..\..\src\xenbus\store.c" />
 		<ClCompile Include="..\..\src\xenbus\suspend.c" />

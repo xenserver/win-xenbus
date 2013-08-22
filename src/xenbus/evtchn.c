@@ -36,7 +36,7 @@
 
 #include "evtchn.h"
 #include "fdo.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 typedef struct _EVTCHN_FIXED_PARAMETERS {

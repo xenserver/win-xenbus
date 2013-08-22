@@ -33,7 +33,7 @@
 #include <xen.h>
 
 #include "hypercall.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define MAXIMUM_HYPERCALL_PFN_COUNT 2

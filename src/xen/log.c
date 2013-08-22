@@ -35,7 +35,6 @@
 
 #include <ntddk.h>
 #include <stdlib.h>
-#include <xen.h>
 
 #include "log.h"
 #include "assert.h"
@@ -43,9 +42,24 @@
 
 #define LOG_BUFFER_SIZE 256
 
-static UCHAR        LogBuffer[LOG_BUFFER_SIZE];
-static ULONG        LogOffset;
-static HIGH_LOCK    LogLock;
+struct _LOG_DISPOSITION {
+    LOG_LEVEL   Mask;
+    VOID        (*Function)(PVOID, PCHAR, ULONG);
+    PVOID       Argument;
+};
+
+#define LOG_MAXIMUM_DISPOSITION 8
+
+typedef struct _LOG_CONTEXT {
+    LONG            References;
+    BOOLEAN         Enabled;
+    CHAR            Buffer[LOG_BUFFER_SIZE];
+    ULONG           Offset;
+    LOG_DISPOSITION Disposition[LOG_MAXIMUM_DISPOSITION];
+    HIGH_LOCK       Lock;
+} LOG_CONTEXT, *PLOG_CONTEXT;
+
+static LOG_CONTEXT  LogContext;
 
 static FORCEINLINE
 __drv_maxIRQL(HIGH_LEVEL)
@@ -53,39 +67,45 @@ __drv_raisesIRQL(HIGH_LEVEL)
 __drv_savesIRQL
 KIRQL
 __LogAcquireBuffer(
-    VOID
+    IN  PLOG_CONTEXT    Context
     )
 {
-    return __AcquireHighLock(&LogLock);
+    return __AcquireHighLock(&Context->Lock);
 }
-
-#define LOG_XEN_PORT    0xE9
-#define LOG_QEMU_PORT   0x12
 
 static DECLSPEC_NOINLINE VOID
 __drv_maxIRQL(HIGH_LEVEL)
 __drv_requiresIRQL(HIGH_LEVEL)
 __LogReleaseBuffer(
-    IN  USHORT                      Port,
+    IN  PLOG_CONTEXT                Context,
+    IN  LOG_LEVEL                   Level,
     IN  __drv_restoresIRQL KIRQL    Irql
     )
 {
-    __outbytestring(Port, LogBuffer, LogOffset);
+    ULONG                           Index;
 
-    RtlZeroMemory(LogBuffer, LogOffset);
-    LogOffset = 0;
+    for (Index = 0; Index < LOG_MAXIMUM_DISPOSITION; Index++) {
+        PLOG_DISPOSITION    Disposition = &Context->Disposition[Index];
 
-    ReleaseHighLock(&LogLock, Irql);
+        if (Level & Disposition->Mask)
+            Disposition->Function(Disposition->Argument, Context->Buffer, Context->Offset);
+    }
+
+    RtlZeroMemory(Context->Buffer, Context->Offset);
+    Context->Offset = 0;
+
+    ReleaseHighLock(&Context->Lock, Irql);
 }
 
 static FORCEINLINE VOID
 __LogPut(
-    IN  CHAR    Character
+    IN  PLOG_CONTEXT    Context,
+    IN  CHAR            Character
     )
 {
-    ASSERT(LogOffset < LOG_BUFFER_SIZE);
+    ASSERT(Context->Offset < LOG_BUFFER_SIZE);
 
-    LogBuffer[LogOffset++] = Character;
+    Context->Buffer[Context->Offset++] = Character;
 }
 
 static DECLSPEC_NOINLINE PCHAR
@@ -149,13 +169,14 @@ LogFormatNumber(
         } while (FALSE)
 
 static DECLSPEC_NOINLINE VOID
-LogCchVPrintf(
-    IN  LONG        Count,
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
+LogWriteBuffer(
+    IN  PLOG_CONTEXT    Context, 
+    IN  LONG            Count,
+    IN  const CHAR      *Format,
+    IN  va_list         Arguments
     )
 {
-    CHAR            Character;
+    CHAR                Character;
 
     while ((Character = *Format++) != '\0') {
         UCHAR   Pad = 0;
@@ -165,7 +186,7 @@ LogCchVPrintf(
         BOOLEAN OppositeJustification = FALSE;
         
         if (Character != '%') {
-            __LogPut(Character);
+            __LogPut(Context, Character);
             goto loop;
         }
 
@@ -214,13 +235,13 @@ LogCchVPrintf(
                 WCHAR   Value;
                 Value = va_arg(Arguments, WCHAR);
 
-                __LogPut((CHAR)Value);
+                __LogPut(Context, (CHAR)Value);
             } else { 
                 CHAR    Value;
 
                 Value = va_arg(Arguments, CHAR);
 
-                __LogPut(Value);
+                __LogPut(Context, Value);
             }
             break;
         }
@@ -247,15 +268,15 @@ LogCchVPrintf(
             Length = (ULONG)strlen(Buffer);
             if (!OppositeJustification) {
                 while (Pad > Length) {
-                    __LogPut((ZeroPrefix) ? '0' : ' ');
+                    __LogPut(Context, (ZeroPrefix) ? '0' : ' ');
                     --Pad;
                 }
             }
             for (Index = 0; Index < Length; Index++)
-                __LogPut(Buffer[Index]);
+                __LogPut(Context, Buffer[Index]);
             if (OppositeJustification) {
                 while (Pad > Length) {
-                    __LogPut(' ');
+                    __LogPut(Context, ' ');
                     --Pad;
                 }
             }
@@ -275,17 +296,17 @@ LogCchVPrintf(
 
                 if (OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
 
                 for (Index = 0; Index < Length; Index++)
-                    __LogPut((CHAR)Value[Index]);
+                    __LogPut(Context, (CHAR)Value[Index]);
 
                 if (!OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
@@ -301,17 +322,17 @@ LogCchVPrintf(
 
                 if (OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
 
                 for (Index = 0; Index < Length; Index++)
-                    __LogPut(Value[Index]);
+                    __LogPut(Context, Value[Index]);
 
                 if (!OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
@@ -336,17 +357,17 @@ LogCchVPrintf(
 
                 if (OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
 
                 for (Index = 0; Index < Length; Index++)
-                    __LogPut((CHAR)Buffer[Index]);
+                    __LogPut(Context, (CHAR)Buffer[Index]);
 
                 if (!OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
@@ -366,17 +387,17 @@ LogCchVPrintf(
 
                 if (OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
 
                 for (Index = 0; Index < Length; Index++)
-                    __LogPut(Buffer[Index]);
+                    __LogPut(Context, Buffer[Index]);
 
                 if (!OppositeJustification) {
                     while (Pad > Length) {
-                        __LogPut(' ');
+                        __LogPut(Context, ' ');
                         --Pad;
                     }
                 }
@@ -385,7 +406,7 @@ LogCchVPrintf(
             break;
         }
         default:
-            __LogPut(Character);
+            __LogPut(Context, Character);
             break;
         }
 
@@ -395,40 +416,43 @@ loop:
     }
 }
 
-static FORCEINLINE VOID
-__LogXenCchVPrintf(
+XEN_API
+VOID
+LogCchVPrintf(
+    IN  LOG_LEVEL   Level,
     IN  ULONG       Count,
     IN  const CHAR  *Format,
     IN  va_list     Arguments
     )
 {
+    PLOG_CONTEXT    Context = &LogContext;
     KIRQL           Irql;
 
-    Irql = __LogAcquireBuffer();
+    Irql = __LogAcquireBuffer(Context);
 
-    LogCchVPrintf(__min(Count, LOG_BUFFER_SIZE),
-                  Format,
-                  Arguments);
+    LogWriteBuffer(Context,
+                   __min(Count, LOG_BUFFER_SIZE),
+                   Format,
+                   Arguments);
 
-    __LogReleaseBuffer(LOG_XEN_PORT, Irql);
+    __LogReleaseBuffer(Context, Level, Irql);
 }
 
-
 XEN_API
-DECLSPEC_NOINLINE
 VOID
-LogXenCchVPrintf(
-    IN  ULONG       Count,
+LogVPrintf(
+    IN  LOG_LEVEL   Level,
     IN  const CHAR  *Format,
     IN  va_list     Arguments
     )
 {
-    __LogXenCchVPrintf(Count, Format, Arguments);
+    LogCchVPrintf(Level, LOG_BUFFER_SIZE, Format, Arguments);
 }
 
 XEN_API
 VOID
-LogXenCchPrintf(
+LogCchPrintf(
+    IN  LOG_LEVEL   Level,
     IN  ULONG       Count,
     IN  const CHAR  *Format,
     ...
@@ -437,41 +461,14 @@ LogXenCchPrintf(
     va_list         Arguments;
 
     va_start(Arguments, Format);
-    __LogXenCchVPrintf(Count, Format, Arguments);
+    LogCchVPrintf(Level, Count, Format, Arguments);
     va_end(Arguments);
 }
 
-static FORCEINLINE VOID
-__LogXenVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    KIRQL           Irql;
-
-    Irql = __LogAcquireBuffer();
-
-    LogCchVPrintf(LOG_BUFFER_SIZE,
-                  Format,
-                  Arguments);
-
-    __LogReleaseBuffer(LOG_XEN_PORT, Irql);
-}
-
-XEN_API
-DECLSPEC_NOINLINE
-VOID
-LogXenVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    __LogXenVPrintf(Format, Arguments);
-}
-
 XEN_API
 VOID
-LogXenPrintf(
+LogPrintf(
+    IN  LOG_LEVEL   Level,
     IN  const CHAR  *Format,
     ...
     )
@@ -479,94 +476,7 @@ LogXenPrintf(
     va_list         Arguments;
 
     va_start(Arguments, Format);
-    __LogXenVPrintf(Format, Arguments);
-    va_end(Arguments);
-}
-
-static FORCEINLINE VOID
-__LogQemuCchVPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    KIRQL           Irql;
-
-    Irql = __LogAcquireBuffer();
-
-    LogCchVPrintf(__min(Count, LOG_BUFFER_SIZE),
-                  Format,
-                  Arguments);
-
-    __LogReleaseBuffer(LOG_QEMU_PORT, Irql);
-}
-
-XEN_API
-DECLSPEC_NOINLINE
-VOID
-LogQemuCchVPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    __LogQemuCchVPrintf(Count, Format, Arguments);
-}
-
-XEN_API
-VOID
-LogQemuCchPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-    __LogQemuCchVPrintf(Count, Format, Arguments);
-    va_end(Arguments);
-}
-
-static FORCEINLINE VOID
-__LogQemuVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    KIRQL           Irql;
-
-    Irql = __LogAcquireBuffer();
-
-    LogCchVPrintf(LOG_BUFFER_SIZE,
-                  Format,
-                  Arguments);
-
-    __LogReleaseBuffer(LOG_QEMU_PORT, Irql);
-}
-
-XEN_API
-DECLSPEC_NOINLINE
-VOID
-LogQemuVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    )
-{
-    __LogQemuVPrintf(Format, Arguments);
-}
-
-XEN_API
-VOID
-LogQemuPrintf(
-    IN  const CHAR  *Format,
-    ...
-    )
-{
-    va_list         Arguments;
-
-    va_start(Arguments, Format);
-    __LogQemuVPrintf(Format, Arguments);
+    LogCchVPrintf(Level, LOG_BUFFER_SIZE, Format, Arguments);
     va_end(Arguments);
 }
 
@@ -577,104 +487,33 @@ typedef VOID
     ULONG           Level
     );
 
-static VOID
+static DECLSPEC_NOINLINE VOID
 LogDebugPrint(
     IN  PANSI_STRING    Ansi,
     IN  ULONG           ComponentId,
     IN  ULONG           Level
     )
 {
+    PLOG_CONTEXT        Context = &LogContext;
+    KIRQL               Irql;
+    ULONG               Index;
+
     if (Ansi->Length == 0 || Ansi->Buffer == NULL)
         return;
 
-    if (ComponentId == DPFLTR_IHVDRIVER_ID) {
-        switch (Level) {
-        case DPFLTR_ERROR_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
-            break;
+    if (ComponentId != DPFLTR_IHVDRIVER_ID)
+        return;
 
-        case DPFLTR_WARNING_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
-            break;
+    AcquireHighLock(&Context->Lock, &Irql);
 
-        case DPFLTR_INFO_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
-            break;
+    for (Index = 0; Index < LOG_MAXIMUM_DISPOSITION; Index++) {
+        PLOG_DISPOSITION    Disposition = &Context->Disposition[Index];
 
-        case DPFLTR_TRACE_LEVEL:
-            LogXenCchPrintf(Ansi->Length, Ansi->Buffer);
-            break;
-
-        default:
-            break;
-        }
-    } else {
-        LogXenCchPrintf(Ansi->Length, Ansi->Buffer);
-    }
-}
-
-BOOLEAN CallbackInstalled;
-
-#define LOG_ENABLE_FILTER(_Id, _Level)                              \
-        do {                                                        \
-            DbgSetDebugFilterState((_Id), (_Level), TRUE);          \
-            DbgPrintEx((_Id),                                       \
-                       (_Level),                                    \
-                       "DbgPrint(%s, %s) interception enabled\n",   \
-/**/                   #_Id,                                        \
-/**/                   #_Level);                                    \
-        } while (FALSE)
-
-static FORCEINLINE VOID
-__LogEnable(
-    VOID
-    )
-{
-    NTSTATUS    status;
-
-    if (!CallbackInstalled) {
-        status = DbgSetDebugPrintCallback(LogDebugPrint, TRUE);
-        CallbackInstalled = NT_SUCCESS(status) ? TRUE : FALSE;
+        if ((1 << Level) & Disposition->Mask)
+            Disposition->Function(Disposition->Argument, Ansi->Buffer, Ansi->Length);
     }
 
-    LOG_ENABLE_FILTER(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_IHVDRIVER_ID, DPFLTR_WARNING_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_IHVDRIVER_ID, DPFLTR_TRACE_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL);
-
-    LOG_ENABLE_FILTER(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_DEFAULT_ID, DPFLTR_WARNING_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL);
-    LOG_ENABLE_FILTER(DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL);
-}
-
-XEN_API
-VOID
-LogEnable(
-    VOID
-    )
-{
-    __LogEnable();
-}
-
-static FORCEINLINE VOID
-__LogDisable(
-    VOID
-    )
-{
-    if (CallbackInstalled) {
-        (VOID) DbgSetDebugPrintCallback(LogDebugPrint, FALSE); 
-        CallbackInstalled = FALSE;
-    }
-}
-
-XEN_API
-VOID
-LogDisable(
-    VOID
-    )
-{
-    __LogDisable();
+    ReleaseHighLock(&Context->Lock, Irql);
 }
 
 VOID
@@ -682,14 +521,119 @@ LogTeardown(
     VOID
     )
 {
-    __LogDisable();
+    PLOG_CONTEXT    Context = &LogContext;
+
+    if (Context->Enabled) {
+        (VOID) DbgSetDebugPrintCallback(LogDebugPrint, FALSE); 
+        Context->Enabled = FALSE;
+    }
+
+    RtlZeroMemory(&Context->Lock, sizeof (HIGH_LOCK));
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (LOG_CONTEXT)));
 }
 
-VOID
+NTSTATUS
+LogAddDisposition(
+    IN  LOG_LEVEL           Mask,
+    IN  VOID                (*Function)(PVOID, PCHAR, ULONG),
+    IN  PVOID               Argument OPTIONAL,
+    OUT PLOG_DISPOSITION    *Disposition
+    )
+{
+    PLOG_CONTEXT            Context = &LogContext;
+    KIRQL                   Irql;
+    ULONG                   Index;
+    NTSTATUS                status;
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Mask == 0)
+        goto fail1;
+
+    AcquireHighLock(&Context->Lock, &Irql);
+
+    status = STATUS_UNSUCCESSFUL;
+    for (Index = 0; Index < LOG_MAXIMUM_DISPOSITION; Index++) {
+        *Disposition = &Context->Disposition[Index];
+
+        if ((*Disposition)->Mask == 0) {
+            (*Disposition)->Mask = Mask;
+            (*Disposition)->Function = Function;
+            (*Disposition)->Argument = Argument;
+
+            status = STATUS_SUCCESS;
+            break;
+        }
+    }
+
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    ReleaseHighLock(&Context->Lock, Irql);
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    *Disposition = NULL;
+
+    ReleaseHighLock(&Context->Lock, Irql);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+extern VOID
+LogRemoveDisposition(
+    IN  PLOG_DISPOSITION    Disposition
+    )
+{
+    PLOG_CONTEXT            Context = &LogContext;
+    KIRQL                   Irql;
+    ULONG                   Index;
+
+    AcquireHighLock(&Context->Lock, &Irql);
+
+    for (Index = 0; Index < LOG_MAXIMUM_DISPOSITION; Index++) {
+        if (&Context->Disposition[Index] != Disposition)
+            continue;
+
+        RtlZeroMemory(&Context->Disposition[Index], sizeof (LOG_DISPOSITION));
+    }
+
+    ReleaseHighLock(&Context->Lock, Irql);
+}
+
+NTSTATUS
 LogInitialize(
     VOID)
 {
-    InitializeHighLock(&LogLock);
+    PLOG_CONTEXT    Context = &LogContext;
+    ULONG           References;
+    NTSTATUS        status;
 
-    __LogEnable();
+    References = InterlockedIncrement(&Context->References);
+
+    status = STATUS_OBJECTID_EXISTS;
+    if (References != 1)
+        goto fail1;
+
+    InitializeHighLock(&Context->Lock);
+
+    ASSERT(!Context->Enabled);
+
+    status = DbgSetDebugPrintCallback(LogDebugPrint, TRUE);
+    Context->Enabled = NT_SUCCESS(status) ? TRUE : FALSE;
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
 }

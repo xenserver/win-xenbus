@@ -37,7 +37,7 @@
 
 #include "gnttab.h"
 #include "fdo.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define GNTTAB_MAXIMUM_ENTRY_FRAME_COUNT    32

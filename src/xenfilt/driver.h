@@ -35,9 +35,15 @@
 #include "pdo.h"
 #include "fdo.h"
 
-extern PDRIVER_OBJECT               DriverObject;
+extern PDRIVER_OBJECT
+DriverGetDriverObject(
+    VOID
+    );
 
-extern LONG                         DriverInitialized;
+extern HANDLE
+DriverGetParametersKey(
+    VOID
+    );
 
 #define MAX_DEVICE_ID_LEN   200
 
@@ -67,10 +73,5 @@ typedef struct _XENFILT_DX {
 } XENFILT_DX, *PXENFILT_DX;
 
 #pragma warning(pop)
-
-extern PXENFILT_EMULATED_INTERFACE
-DriverGetEmulatedInterface(
-    VOID
-    );
 
 #endif  // _XENFILT_DRIVER_H

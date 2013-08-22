@@ -195,107 +195,6 @@ SchedYield(
     VOID
     );
 
-// LOG
-
-XEN_API
-VOID
-LogXenCchVPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    );
-
-XEN_API
-VOID
-LogXenCchPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    ...
-    );
-
-XEN_API
-VOID
-LogXenVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    );
-
-XEN_API
-VOID
-LogXenPrintf(
-    IN  const CHAR  *Format,
-    ...
-    );
-
-XEN_API
-VOID
-LogQemuCchVPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    );
-
-XEN_API
-VOID
-LogQemuCchPrintf(
-    IN  ULONG       Count,
-    IN  const CHAR  *Format,
-    ...
-    );
-
-XEN_API
-VOID
-LogQemuVPrintf(
-    IN  const CHAR  *Format,
-    IN  va_list     Arguments
-    );
-
-XEN_API
-VOID
-LogQemuPrintf(
-    IN  const CHAR  *Format,
-    ...
-    );
-
-XEN_API
-VOID
-LogEnable(
-    VOID
-    );
-
-XEN_API
-VOID
-LogDisable(
-    VOID
-    );
-
-// UNPLUG
-
-XEN_API
-NTSTATUS
-UnplugReference(
-    VOID
-    );
-
-XEN_API
-VOID
-UnplugDereference(
-    VOID
-    );
-
-XEN_API
-NTSTATUS
-UnplugDevice(
-    PCHAR   Class,
-    PCHAR   Device
-    );
-
-XEN_API
-VOID
-UnplugReplay(
-    VOID
-    );
-
 // MODULE
 
 XEN_API
@@ -304,6 +203,51 @@ ModuleLookup(
     IN  ULONG_PTR   Address,
     OUT PCHAR       *Name,
     OUT PULONG_PTR  Offset
+    );
+
+// LOG
+
+typedef enum _LOG_LEVEL {
+    LOG_LEVEL_INVALID = 0,
+    LOG_LEVEL_TRACE = 1 << DPFLTR_TRACE_LEVEL,
+    LOG_LEVEL_INFO = 1 << DPFLTR_INFO_LEVEL,
+    LOG_LEVEL_WARNING = 1 << DPFLTR_WARNING_LEVEL,
+    LOG_LEVEL_ERROR = 1 << DPFLTR_ERROR_LEVEL,
+    LOG_LEVEL_CRITICAL = 0x80000000
+} LOG_LEVEL, *PLOG_LEVEL;
+
+XEN_API
+VOID
+LogCchVPrintf(
+    IN  LOG_LEVEL   Level,
+    IN  ULONG       Count,
+    IN  const CHAR  *Format,
+    IN  va_list     Arguments
+    );
+
+XEN_API
+VOID
+LogVPrintf(
+    IN  LOG_LEVEL   Level,
+    IN  const CHAR  *Format,
+    IN  va_list     Arguments
+    );
+
+XEN_API
+VOID
+LogCchPrintf(
+    IN  LOG_LEVEL   Level,
+    IN  ULONG       Count,
+    IN  const CHAR  *Format,
+    ...
+    );
+
+XEN_API
+VOID
+LogPrintf(
+    IN  LOG_LEVEL   Level,
+    IN  const CHAR  *Format,
+    ...
     );
 
 #endif  // _XEN_H

@@ -35,7 +35,7 @@
 
 #include "shared_info.h"
 #include "fdo.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 struct _XENBUS_SHARED_INFO_CONTEXT {

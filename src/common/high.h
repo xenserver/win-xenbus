@@ -29,8 +29,8 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XENBUS_HIGH_H
-#define _XENBUS_HIGH_H
+#ifndef _COMMON_HIGH_H
+#define _COMMON_HIGH_H
 
 #include <ntddk.h>
 
@@ -90,4 +90,4 @@ InitializeHighLock(
     RtlZeroMemory(&Lock, sizeof (HIGH_LOCK));
 }
 
-#endif  // _XENBUS_HIGH_H
+#endif  // _COMMON_HIGH_H

@@ -32,23 +32,21 @@
 #ifndef _XENBUS_DRIVER_H
 #define _XENBUS_DRIVER_H
 
+extern PDRIVER_OBJECT
+DriverGetDriverObject(
+    VOID
+    );
+
+extern HANDLE
+DriverGetParametersKey(
+    VOID
+    );
+
 typedef struct _XENBUS_FDO      XENBUS_FDO, *PXENBUS_FDO;
 typedef struct _XENBUS_PDO      XENBUS_PDO, *PXENBUS_PDO;
 
 #include "pdo.h"
 #include "fdo.h"
-
-extern PDRIVER_OBJECT   DriverObject;
-
-typedef struct _XENBUS_PARAMETERS {
-    PANSI_STRING    SupportedClasses;
-    PANSI_STRING    SyntheticClasses;
-    ULONG           CreatePDOs;
-    ULONG           Balloon;
-    ULONG           InterceptDmaAdapter;
-} XENBUS_PARAMETERS, *PXENBUS_PARAMETERS;
-
-extern XENBUS_PARAMETERS    DriverParameters;
 
 #define MAX_DEVICE_ID_LEN   200
 

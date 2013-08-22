@@ -38,8 +38,6 @@
 #include <util.h>
 #include <xen.h>
 
-#include <emulated_interface.h>
-
 #include "names.h"
 #include "fdo.h"
 #include "pdo.h"
@@ -47,7 +45,7 @@
 #include "driver.h"
 #include "registry.h"
 #include "mutex.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define FDO_TAG 'ODF'
@@ -65,7 +63,7 @@ struct _XENFILT_FDO {
     PIRP                        DevicePowerIrp;
 
     PANSI_STRING                Classes;
-    XENFILT_MUTEX               Mutex;
+    MUTEX                       Mutex;
     ULONG                       References;
 };
 
@@ -337,8 +335,6 @@ __FdoS4ToS3(
 {
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemHibernate);
 
-    UnplugReplay();
-
     __FdoSetSystemPowerState(Fdo, PowerSystemSleeping3);
 }
 
@@ -350,141 +346,6 @@ __FdoS3ToS4(
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemSleeping3);
 
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
-}
-
-static FORCEINLINE VOID
-__FdoUnplugClass(
-    IN  HANDLE          Key,
-    IN  PANSI_STRING    Class
-    )
-{
-    PANSI_STRING        Classes;
-    PANSI_STRING        Devices;
-    ULONG               Index;
-    BOOLEAN             Match;
-    NTSTATUS            status;
-
-    status = RegistryQuerySzValue(Key, "UnplugClasses", &Classes);
-    if (!NT_SUCCESS(status))
-        Classes = NULL;
-
-    Match = FALSE;
-    for (Index = 0; Classes != NULL && Classes[Index].Buffer != NULL; Index++) {
-        if (strncmp(Classes[Index].Buffer,
-                    Class->Buffer,
-                    Classes[Index].Length) == 0) {
-            Match = TRUE;
-            break;
-        }
-    }
-
-    RegistryFreeSzValue(Classes);
-
-    if (!Match)
-        return;
-
-    status = RegistryQuerySzValue(Key, Class->Buffer, &Devices);
-    if (!NT_SUCCESS(status))
-        Devices = NULL;
-
-    for (Index = 0; Devices != NULL && Devices[Index].Buffer != NULL; Index++) {
-        PANSI_STRING    Device = &Devices[Index];
-
-        (VOID) UnplugDevice(Class->Buffer, Device->Buffer);
-    }
-}
-
-static FORCEINLINE VOID
-__FdoUnplugDevices(
-    IN  HANDLE          Key,
-    IN  PANSI_STRING    Class
-    )
-{
-    PANSI_STRING        Devices;
-    ULONG               Index;
-    NTSTATUS            status;
-
-    status = RegistryQuerySzValue(Key, "UnplugDevices", &Devices);
-    if (!NT_SUCCESS(status))
-        Devices = NULL;
-
-    for (Index = 0; Devices != NULL && Devices[Index].Buffer != NULL; Index++) {
-        PCHAR   Device;
-
-        Device = strchr(Devices->Buffer, '#');
-        if (Device == NULL)
-            continue;
-
-        *Device++ = '\0';
-
-        if (strncmp(Class->Buffer,
-                    Devices->Buffer,
-                    Class->Length) != 0)
-            continue;
-
-        (VOID) UnplugDevice(Class->Buffer, Device);
-    }
-}
-
-static FORCEINLINE NTSTATUS
-__FdoUnplugStart(
-    IN  PXENFILT_FDO    Fdo
-    )
-{
-    HANDLE              ServiceKey;
-    HANDLE              ParametersKey;
-    ULONG               Index;
-    NTSTATUS            status;
-
-    status = UnplugReference();
-    if (!NT_SUCCESS(status))
-        goto fail1;
-
-    status = RegistryOpenServiceKey(KEY_READ, &ServiceKey);
-    if (!NT_SUCCESS(status))
-        goto fail2;
-
-    status = RegistryOpenSubKey(ServiceKey, "Parameters", KEY_READ, &ParametersKey);
-    if (!NT_SUCCESS(status))
-        goto fail3;
-
-    for (Index = 0; Fdo->Classes != NULL && Fdo->Classes[Index].Buffer != NULL; Index++) {
-        PANSI_STRING    Class = &Fdo->Classes[Index];
-
-        __FdoUnplugClass(ParametersKey, Class);
-        __FdoUnplugDevices(ParametersKey, Class);
-    }
-
-    RegistryCloseKey(ParametersKey);
-
-    RegistryCloseKey(ServiceKey);
-
-    return STATUS_SUCCESS;
-
-fail3:
-    Error("fail3\n");
-
-    RegistryCloseKey(ServiceKey);
-
-fail2:
-    Error("fail2\n");
-
-    UnplugDereference();
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    return status;
-}
-
-static FORCEINLINE VOID
-__FdoUnplugStop(
-    IN  PXENFILT_FDO    Fdo
-    )
-{
-    UNREFERENCED_PARAMETER(Fdo);
-
-    UnplugDereference();
 }
 
 __drv_functionClass(IO_COMPLETION_ROUTINE)
@@ -555,8 +416,6 @@ FdoStartDevice(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    (VOID) __FdoUnplugStart(Fdo);
-
     status = FdoForwardIrpSynchronously(Fdo, Irp);
     if (!NT_SUCCESS(status))
         goto fail2;
@@ -583,8 +442,6 @@ FdoStartDevice(
     return status;
 
 fail2:
-    __FdoUnplugStop(Fdo);
-
     IoReleaseRemoveLock(&Fdo->Dx->RemoveLock, Irp);
 
 fail1:
@@ -717,8 +574,6 @@ __FdoStopDevice(
     PXENFILT_FDO        Fdo = Context;
 
     UNREFERENCED_PARAMETER(DeviceObject);
-
-    __FdoUnplugStop(Fdo);
 
     if (Irp->PendingReturned)
         IoMarkIrpPending(Irp);
@@ -972,8 +827,6 @@ FdoRemoveDevice(
 
 done:
     __FdoSetDevicePnpState(Fdo, Deleted);
-
-    __FdoUnplugStop(Fdo);
 
     IoReleaseRemoveLockAndWait(&Fdo->Dx->RemoveLock, Irp);
 
@@ -1930,7 +1783,7 @@ FdoCreate(
     ObDereferenceObject(LowerDeviceObject);
 
 #pragma prefast(suppress:28197) // Possibly leaking memory 'FilterDeviceObject'
-    status = IoCreateDevice(DriverObject,
+    status = IoCreateDevice(DriverGetDriverObject(),
                             sizeof (XENFILT_DX),
                             NULL,
                             DeviceType,
@@ -2077,7 +1930,7 @@ FdoDestroy(
 
     Dx->Fdo = NULL;
 
-    RtlZeroMemory(&Fdo->Mutex, sizeof (XENFILT_MUTEX));
+    RtlZeroMemory(&Fdo->Mutex, sizeof (MUTEX));
 
     if (Fdo->Classes != NULL) {
         RegistryFreeSzValue(Fdo->Classes);

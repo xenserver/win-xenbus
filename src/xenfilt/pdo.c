@@ -41,8 +41,7 @@
 #include "pdo.h"
 #include "thread.h"
 #include "driver.h"
-#include "emulated.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define PDO_TAG 'ODP'
@@ -357,7 +356,7 @@ __PdoSetName(
 
     ASSERT3U(KeGetCurrentIrql(), ==, PASSIVE_LEVEL);
 
-    status = RtlStringCbPrintfA(Dx->Name, MAX_DEVICE_ID_LEN, "%ws#%ws", DeviceID, InstanceID);
+    status = RtlStringCbPrintfA(Dx->Name, MAX_DEVICE_ID_LEN, "%ws\\%ws", DeviceID, InstanceID);
     ASSERT(NT_SUCCESS(status));
 }
 
@@ -866,50 +865,6 @@ fail1:
     return status;
 }
 
-static NTSTATUS
-PdoQueryEmulatedInterface(
-    IN  PXENFILT_PDO            Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PXENFILT_EMULATED_INTERFACE EmulatedInterface;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    UNREFERENCED_PARAMETER(Pdo);
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != EMULATED_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    EmulatedInterface = DriverGetEmulatedInterface();
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = EMULATED_INTERFACE_VERSION;
-    Interface->Context = EmulatedInterface;
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
 __drv_functionClass(IO_COMPLETION_ROUTINE)
 __drv_sameIRQL
 static NTSTATUS
@@ -941,7 +896,6 @@ struct _INTERFACE_ENTRY {
         { &GUID_ ## _Guid, #_Guid, (_Function) }
 
 struct _INTERFACE_ENTRY PdoInterfaceTable[] = {
-    DEFINE_HANDLER(EMULATED_INTERFACE, PdoQueryEmulatedInterface),
     { NULL, NULL, NULL }
 };
 
@@ -1812,7 +1766,6 @@ PdoCreate(
     PXENFILT_PDO                Pdo;
     PWCHAR                      DeviceID;
     PWCHAR                      InstanceID;
-    PXENFILT_EMULATED_INTERFACE EmulatedInterface;
     NTSTATUS                    status;
 
     LowerDeviceObject = IoGetAttachedDeviceReference(PhysicalDeviceObject);
@@ -1820,7 +1773,7 @@ PdoCreate(
     ObDereferenceObject(LowerDeviceObject);
 
 #pragma prefast(suppress:28197) // Possibly leaking memory 'PhysicalDeviceObject'
-    status = IoCreateDevice(DriverObject,
+    status = IoCreateDevice(DriverGetDriverObject(),
                             sizeof(XENFILT_DX),
                             NULL,
                             DeviceType,
@@ -1878,16 +1831,6 @@ PdoCreate(
                  (DeviceID != NULL) ? DeviceID : L"UNKNOWN",
                  (InstanceID != NULL) ? InstanceID : L"UNKNOWN");
 
-    EmulatedInterface = DriverGetEmulatedInterface();
-
-    EMULATED(Acquire, EmulatedInterface);
-
-    status = EmulatedUpdate(EmulatedInterface, __PdoGetName(Pdo));
-    if (!NT_SUCCESS(status))
-        goto fail6;
-
-    EMULATED(Release, EmulatedInterface);
-
     Info("%p (%s)\n",
           FilterDeviceObject,
           __PdoGetName(Pdo));
@@ -1910,15 +1853,6 @@ PdoCreate(
         ExFreePool(InstanceID);
 
     return STATUS_SUCCESS;
-
-fail6:
-    Error("fail6\n");
-
-    EMULATED(Release, EmulatedInterface);
-
-    ThreadAlert(Pdo->DevicePowerThread);
-    ThreadJoin(Pdo->DevicePowerThread);
-    Pdo->DevicePowerThread = NULL;
 
 fail5:
     Error("fail5\n");

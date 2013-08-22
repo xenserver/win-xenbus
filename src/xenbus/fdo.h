@@ -50,7 +50,8 @@ typedef struct _XENBUS_RESOURCE {
 
 extern NTSTATUS
 FdoCreate(
-    IN  PDEVICE_OBJECT  PhysicalDeviceObject
+    IN  PDEVICE_OBJECT  PhysicalDeviceObject,
+    IN  BOOLEAN         Active
     );
 
 extern VOID
@@ -60,30 +61,30 @@ FdoDestroy(
 
 extern NTSTATUS
 FdoDelegateIrp(
-    IN  PXENBUS_FDO     Fdo,
-    IN  PIRP            Irp
+    IN  PXENBUS_FDO Fdo,
+    IN  PIRP        Irp
     );
 
 extern VOID
 FdoAddPhysicalDeviceObject(
-    IN  PXENBUS_FDO     Fdo,
-    IN  PXENBUS_PDO     Pdo
+    IN  PXENBUS_FDO Fdo,
+    IN  PXENBUS_PDO Pdo
     );
 
 extern VOID
 FdoRemovePhysicalDeviceObject(
-    IN  PXENBUS_FDO     Fdo,
-    IN  PXENBUS_PDO     Pdo
+    IN  PXENBUS_FDO Fdo,
+    IN  PXENBUS_PDO Pdo
     );
 
 extern VOID
 FdoAcquireMutex(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 extern VOID
 FdoReleaseMutex(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 extern PDEVICE_OBJECT
@@ -103,6 +104,11 @@ FdoGetName(
     IN  PXENBUS_FDO Fdo
     );
 
+PCHAR
+FdoGetVendorName(
+    IN  PXENBUS_FDO Fdo
+    );
+
 extern PXENBUS_RESOURCE
 FdoGetResource(
     IN  PXENBUS_FDO             Fdo,
@@ -118,42 +124,42 @@ FdoGetInterruptObject(
 
 extern PXENBUS_SUSPEND_INTERFACE
 FdoGetSuspendInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 #include "shared_info.h"
 
 extern PXENBUS_SHARED_INFO_INTERFACE
 FdoGetSharedInfoInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 #include "evtchn.h"
 
 extern PXENBUS_EVTCHN_INTERFACE
 FdoGetEvtchnInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 #include "debug.h"
 
 extern PXENBUS_DEBUG_INTERFACE
 FdoGetDebugInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 #include "store.h"
 
 extern PXENBUS_STORE_INTERFACE
 FdoGetStoreInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 #include "gnttab.h"
 
 extern PXENBUS_GNTTAB_INTERFACE
 FdoGetGnttabInterface(
-    IN  PXENBUS_FDO     Fdo
+    IN  PXENBUS_FDO Fdo
     );
 
 extern NTSTATUS

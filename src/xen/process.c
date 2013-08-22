@@ -35,20 +35,24 @@
 #include <xen.h>
 
 #include "process.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
+
+typedef struct _PROCESS_CONTEXT {
+    LONG            References;
+} PROCESS_CONTEXT, *PPROCESS_CONTEXT;
+
+static PROCESS_CONTEXT  ProcessContext;
 
 static VOID
 ProcessNotify(
-    IN  HANDLE          ParentId,
-    IN  HANDLE          ProcessId,
-    IN  BOOLEAN         Create
+    IN  HANDLE                      ParentId,
+    IN  HANDLE                      ProcessId,
+    IN  BOOLEAN                     Create
     )
 {
-    static LONG         HAP = -1;
-    KIRQL               Irql;
-    PHYSICAL_ADDRESS    Address;
-    NTSTATUS            status;
+    KIRQL                           Irql;
+    PHYSICAL_ADDRESS                Address;
 
     UNREFERENCED_PARAMETER(ParentId);
     UNREFERENCED_PARAMETER(ProcessId);
@@ -56,25 +60,14 @@ ProcessNotify(
     if (Create)
         return;
 
-    if (HAP > 0)    // Hardware Assisted Paging
-        return;
-
     // Process destruction callbacks occur within the context of the
     // dying process so just read the current CR3 and notify Xen that
     // it's about to cease pointing at a page table hierarchy.
-    // If the hypercall fails with EINVAL the either we're not an HVM
-    // domain, which would be pretty miraculous, or HAP is turned on
-    // in which case we need not tell Xen about CR3 invalidation.
 
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
 
-    Address.QuadPart = __readcr3();
-    status = HvmPagetableDying(Address);
-    if (!NT_SUCCESS(status) && HAP < 0) {
-        HAP = (status == STATUS_INVALID_PARAMETER) ? 1 : 0;
-
-        Info("PAGING MODE: %s\n", (HAP > 0) ? "HAP" : "Shadow");
-    }
+    Address.QuadPart = __readcr3();   
+    (VOID)HvmPagetableDying(Address);
 
     KeLowerIrql(Irql);
 }
@@ -84,23 +77,45 @@ ProcessTeardown(
     VOID
     )
 {
+    PPROCESS_CONTEXT    Context = &ProcessContext;
+
     (VOID) PsSetCreateProcessNotifyRoutine(ProcessNotify, TRUE);
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (PROCESS_CONTEXT)));
 }
 
 NTSTATUS
 ProcessInitialize(
-    VOID)
+    VOID              
+    )
 {
-    NTSTATUS    status;
+    PPROCESS_CONTEXT    Context = &ProcessContext;
+    ULONG               References;
+    NTSTATUS            status;
+
+    References = InterlockedIncrement(&Context->References);
+
+    status = STATUS_OBJECTID_EXISTS;
+    if (References != 1)
+        goto fail1;
 
     status = PsSetCreateProcessNotifyRoutine(ProcessNotify, FALSE);
     if (!NT_SUCCESS(status))
-        goto fail1;
+        goto fail2;
 
     return STATUS_SUCCESS;
 
+fail2:
+    Error("fail2\n");
+
 fail1:
     Error("fail1 (%08x)\n", status);
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (PROCESS_CONTEXT)));
 
     return status;
 }

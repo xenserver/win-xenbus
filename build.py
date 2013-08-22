@@ -54,22 +54,6 @@ def make_version_header():
     file.close()
 
 
-def make_binding_header():
-    now = datetime.datetime.now()
-
-    file = open('include\\binding.h', 'w')
-    file.write('#define PCI_VENDOR_ID\t' + '0x' + os.environ['PCI_VENDOR_ID'] + '\n')
-    file.write('\n')
-
-    file.write('#define PCI_DEVICE_ID\t' + '0x' + os.environ['PCI_DEVICE_ID'] + '\n')
-    file.write('\n')
-
-    file.write('#define PCI_REVISION\t' + '0x' + os.environ['PCI_REVISION'] + '\n')
-    file.write('\n')
-
-    file.close()
-
-
 def copy_inf(name):
     src = open('src\\%s.inf' % name, 'r')
     dst = open('proj\\%s.inf' % name, 'w')
@@ -79,9 +63,6 @@ def copy_inf(name):
         line = re.sub('@MINOR_VERSION@', os.environ['MINOR_VERSION'], line)
         line = re.sub('@MICRO_VERSION@', os.environ['MICRO_VERSION'], line)
         line = re.sub('@BUILD_NUMBER@', os.environ['BUILD_NUMBER'], line)
-        line = re.sub('@PCI_VENDOR_ID@', os.environ['PCI_VENDOR_ID'], line)
-        line = re.sub('@PCI_DEVICE_ID@', os.environ['PCI_DEVICE_ID'], line)
-        line = re.sub('@PCI_REVISION@', os.environ['PCI_REVISION'], line)
         dst.write(line)
 
     dst.close()
@@ -303,12 +284,6 @@ if __name__ == '__main__':
     print("BUILD_NUMBER=%s" % os.environ['BUILD_NUMBER'])
 
     make_version_header()
-
-    os.environ['PCI_VENDOR_ID'] = '5853'
-    os.environ['PCI_DEVICE_ID'] = '0002'
-    os.environ['PCI_REVISION'] = '02'
-
-    make_binding_header()
 
     copy_inf(driver)
 

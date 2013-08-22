@@ -35,21 +35,38 @@
 #include <xen.h>
 
 #include "hypercall.h"
-#include "debug.h"
-#include "dump.h"
+#include "log.h"
 #include "module.h"
 #include "process.h"
-#include "unplug.h"
 #include "system.h"
-#include "log.h"
+#include "bug_check.h"
+#include "dbg_print.h"
 #include "assert.h"
 #include "version.h"
 
 extern PULONG   InitSafeBootMode;
 
-XEN_API
-const CHAR *
-XenVersion = MAJOR_VERSION_STR "." MINOR_VERSION_STR "." MICRO_VERSION_STR;
+typedef struct _XEN_DRIVER {
+    PLOG_DISPOSITION    TraceDisposition;
+    PLOG_DISPOSITION    InfoDisposition;
+} XEN_DRIVER, *PXEN_DRIVER;
+
+static XEN_DRIVER   Driver;
+
+static VOID
+DriverOutputBuffer(
+    IN  PVOID   Argument,
+    IN  PCHAR   Buffer,
+    IN  ULONG   Length
+    )
+{
+    ULONG_PTR   Port = (ULONG_PTR)Argument;
+
+    __outbytestring((USHORT)Port, (PUCHAR)Buffer, Length);
+}
+
+#define XEN_PORT    0xE9
+#define QEMU_PORT   0x12
 
 NTSTATUS
 DllInitialize(
@@ -62,26 +79,50 @@ DllInitialize(
 
     ExInitializeDriverRuntime(DrvRtPoolNxOptIn);
 
-    LogInitialize();
+    __DbgPrintEnable();
 
-    Info("%s (%s)\n",
-         MAJOR_VERSION_STR "." MINOR_VERSION_STR "." MICRO_VERSION_STR "." BUILD_NUMBER_STR,
-         DAY_STR "/" MONTH_STR "/" YEAR_STR);
+    Trace("====>\n");
 
     if (*InitSafeBootMode > 0)
         goto done;
+
+    status = LogInitialize();
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    status = LogAddDisposition(LOG_LEVEL_TRACE |
+                               LOG_LEVEL_CRITICAL,
+                               DriverOutputBuffer,
+                               (PVOID)XEN_PORT,
+                               &Driver.TraceDisposition);
+    ASSERT(NT_SUCCESS(status));
+
+    status = LogAddDisposition(LOG_LEVEL_INFO |
+                               LOG_LEVEL_WARNING |
+                               LOG_LEVEL_ERROR |
+                               LOG_LEVEL_CRITICAL,
+                               DriverOutputBuffer,
+                               (PVOID)QEMU_PORT,
+                               &Driver.InfoDisposition);
+    ASSERT(NT_SUCCESS(status));
+
+    LogPrintf(LOG_LEVEL_INFO,
+              "XEN %d.%d.%d (%d) (%02d.%02d.%04d)\n",
+              MAJOR_VERSION,
+              MINOR_VERSION,
+              MICRO_VERSION,
+              BUILD_NUMBER,
+              DAY,
+              MONTH,
+              YEAR);
 
     SystemGetInformation();
 
     status = HypercallInitialize();
     if (!NT_SUCCESS(status))
-        goto fail1;
-
-    status = DebugInitialize();
-    if (!NT_SUCCESS(status))
         goto fail2;
 
-    status = DumpInitialize();
+    status = BugCheckInitialize();
     if (!NT_SUCCESS(status))
         goto fail3;
 
@@ -93,9 +134,9 @@ DllInitialize(
     if (!NT_SUCCESS(status))
         goto fail5;
 
-    UnplugInitialize();
-
 done:
+    Trace("<====\n");
+
     return STATUS_SUCCESS;
 
 fail5:
@@ -106,22 +147,28 @@ fail5:
 fail4:
     Error("fail4\n");
 
-    DumpTeardown();
+    BugCheckTeardown();
 
 fail3:
     Error("fail3\n");
 
-    DebugTeardown();
+    HypercallTeardown();
 
 fail2:
     Error("fail2\n");
 
-    HypercallTeardown();
+    LogRemoveDisposition(Driver.InfoDisposition);
+    Driver.InfoDisposition = NULL;
+
+    LogRemoveDisposition(Driver.TraceDisposition);
+    Driver.TraceDisposition = NULL;
+
+    LogTeardown();
 
 fail1:
     Error("fail1 (%08x)", status);
 
-    LogTeardown();
+    ASSERT(IsZeroMemory(&Driver, sizeof (XEN_DRIVER)));
 
     return status;
 }
@@ -131,27 +178,31 @@ DllUnload(
     VOID
     )
 {
-    Info("%s (%s)\n",
-         MAJOR_VERSION_STR "." MINOR_VERSION_STR "." MICRO_VERSION_STR "." BUILD_NUMBER_STR,
-         DAY_STR "/" MONTH_STR "/" YEAR_STR);
+    Trace("====>\n");
 
     if (*InitSafeBootMode > 0)
         goto done;
-
-    UnplugTeardown();
 
     ProcessTeardown();
 
     ModuleTeardown();
 
-    DumpTeardown();
-
-    DebugTeardown();
+    BugCheckTeardown();
 
     HypercallTeardown();
 
-done:
+    LogRemoveDisposition(Driver.InfoDisposition);
+    Driver.InfoDisposition = NULL;
+
+    LogRemoveDisposition(Driver.TraceDisposition);
+    Driver.TraceDisposition = NULL;
+
     LogTeardown();
+
+done:
+    ASSERT(IsZeroMemory(&Driver, sizeof (XEN_DRIVER)));
+
+    Trace("<====\n");
 
     return STATUS_SUCCESS;
 }

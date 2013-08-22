@@ -38,13 +38,15 @@
 #include "dma.h"
 #include "fdo.h"
 #include "pdo.h"
-#include "log.h"
+#include "registry.h"
 #include "sync.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 typedef struct _XENBUS_BUS_CONTEXT {
     LONG                    References;
     PXENBUS_PDO             Pdo;
+    ULONG                   InterceptDmaAdapter;
 } XENBUS_BUS_CONTEXT, *PXENBUS_BUS_CONTEXT;
 
 #define BUS_TAG 'SUB'
@@ -118,7 +120,7 @@ BusGetDmaAdapter(
     PXENBUS_BUS_CONTEXT     Context = _Context;
     XENBUS_DMA_ADAPTER_TYPE Type;
 
-    if (DriverParameters.InterceptDmaAdapter != 0) {
+    if (Context->InterceptDmaAdapter != 0) {
         RTL_OSVERSIONINFOEXW    VersionInformation;
 
         RtlGetVersion((PRTL_OSVERSIONINFOW)&VersionInformation);
@@ -187,6 +189,7 @@ BusInitialize(
     )
 {
     PXENBUS_BUS_CONTEXT         Context;
+    HANDLE                      ParametersKey;
     NTSTATUS                    status;
 
     Trace("====>\n");
@@ -198,6 +201,20 @@ BusInitialize(
         goto fail1;
 
     Context->Pdo = Pdo;
+
+    ParametersKey = DriverGetParametersKey();
+
+    Context->InterceptDmaAdapter = 0;
+
+    if (ParametersKey != NULL) {
+        ULONG   InterceptDmaAdapter;
+
+        status = RegistryQueryDwordValue(ParametersKey,
+                                         "InterceptDmaAdapter",
+                                         &InterceptDmaAdapter);
+        if (NT_SUCCESS(status))
+            Context->InterceptDmaAdapter = InterceptDmaAdapter;
+    }
 
     Interface->Size = sizeof (BUS_INTERFACE_STANDARD);
     Interface->Version = 1;

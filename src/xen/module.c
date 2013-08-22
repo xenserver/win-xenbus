@@ -29,17 +29,16 @@
  * SUCH DAMAGE.
  */
 
-#define XEN_API   __declspec(dllexport)
+#define XEN_API __declspec(dllexport)
 
 #include <ntddk.h>
 #include <ntstrsafe.h>
 #include <aux_klib.h>
-#include <xen.h>
 #include <util.h>
 
 #include "high.h"
 #include "module.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define MODULE_TAG   'UDOM'
@@ -51,9 +50,14 @@ typedef struct _MODULE {
     CHAR        Name[AUX_KLIB_MODULE_PATH_LEN];
 } MODULE, *PMODULE;
 
-LIST_ENTRY  ModuleList;
-PLIST_ENTRY ModuleCursor = &ModuleList;
-HIGH_LOCK   ModuleLock;
+typedef struct _MODULE_CONTEXT {
+    LONG        References;
+    LIST_ENTRY  List;
+    PLIST_ENTRY Cursor;
+    HIGH_LOCK   Lock;
+} MODULE_CONTEXT, *PMODULE_CONTEXT;
+
+static MODULE_CONTEXT   ModuleContext;
 
 static FORCEINLINE PVOID
 __ModuleAllocate(
@@ -73,28 +77,28 @@ __ModuleFree(
 
 static FORCEINLINE VOID
 __ModuleAudit(
-    VOID
+    IN  PMODULE_CONTEXT Context
     )
 {
-    if (!IsListEmpty(&ModuleList)) {
+    if (!IsListEmpty(&Context->List)) {
         PLIST_ENTRY ListEntry;
         BOOLEAN     FoundCursor;
 
         FoundCursor = FALSE;
 
-        for (ListEntry = ModuleList.Flink;
-             ListEntry != &ModuleList;
+        for (ListEntry = Context->List.Flink;
+             ListEntry != &Context->List;
              ListEntry = ListEntry->Flink) {
             PMODULE Module;
 
-            if (ListEntry == ModuleCursor)
+            if (ListEntry == Context->Cursor)
                 FoundCursor = TRUE;
 
             Module = CONTAINING_RECORD(ListEntry, MODULE, ListEntry);
 
             ASSERT(Module->Start < Module->End);
 
-            if (ListEntry->Flink != &ModuleList) {
+            if (ListEntry->Flink != &Context->List) {
                 PMODULE Next;
 
                 Next = CONTAINING_RECORD(ListEntry->Flink, MODULE, ListEntry);
@@ -109,40 +113,43 @@ __ModuleAudit(
 
 static FORCEINLINE VOID
 __ModuleSearchForwards(
-    IN  ULONG_PTR   Address
+    IN  PMODULE_CONTEXT Context,
+    IN  ULONG_PTR       Address
     )
 {
-    while (ModuleCursor != &ModuleList) {
+    while (Context->Cursor != &Context->List) {
         PMODULE Module;
 
-        Module = CONTAINING_RECORD(ModuleCursor, MODULE, ListEntry);
+        Module = CONTAINING_RECORD(Context->Cursor, MODULE, ListEntry);
 
         if (Address <= Module->End)
             break;
 
-        ModuleCursor = ModuleCursor->Flink;
+        Context->Cursor = Context->Cursor->Flink;
     }
 }
 
 static FORCEINLINE VOID
 __ModuleSearchBackwards(
-    IN  ULONG_PTR   Address
+    IN  PMODULE_CONTEXT Context,
+    IN  ULONG_PTR       Address
     )
 {
-    while (ModuleCursor != &ModuleList) {
+    while (Context->Cursor != &Context->List) {
         PMODULE Module;
 
-        Module = CONTAINING_RECORD(ModuleCursor, MODULE, ListEntry);
+        Module = CONTAINING_RECORD(Context->Cursor, MODULE, ListEntry);
 
         if (Address >= Module->Start)
             break;
 
-        ModuleCursor = ModuleCursor->Blink;
+        Context->Cursor = Context->Cursor->Blink;
     }
 }
 
 static FORCEINLINE NTSTATUS
 __ModuleAdd(
+    IN  PMODULE_CONTEXT Context,
     IN  PCHAR           Name,
     IN  ULONG_PTR       Start,
     IN  ULONG_PTR       Size
@@ -197,79 +204,79 @@ __ModuleAdd(
 
     InitializeListHead(&List);
 
-    AcquireHighLock(&ModuleLock, &Irql);
+    AcquireHighLock(&Context->Lock, &Irql);
 
 again:
     After = TRUE;
 
-    if (ModuleCursor == &ModuleList) {
-        ASSERT(IsListEmpty(&ModuleList));
+    if (Context->Cursor == &Context->List) {
+        ASSERT(IsListEmpty(&Context->List));
         goto done;
     }
 
-    Module = CONTAINING_RECORD(ModuleCursor, MODULE, ListEntry);
+    Module = CONTAINING_RECORD(Context->Cursor, MODULE, ListEntry);
 
     if (New->Start > Module->End) {
-        __ModuleSearchForwards(New->Start);
+        __ModuleSearchForwards(Context, New->Start);
 
         After = FALSE;
 
-        if (ModuleCursor == &ModuleList)    // End of list
+        if (Context->Cursor == &Context->List)    // End of list
             goto done;
 
-        Module = CONTAINING_RECORD(ModuleCursor, MODULE, ListEntry);
+        Module = CONTAINING_RECORD(Context->Cursor, MODULE, ListEntry);
 
         if (New->End >= Module->Start) {    // Overlap
-            PLIST_ENTRY Cursor = ModuleCursor->Blink;
+            PLIST_ENTRY Cursor = Context->Cursor->Blink;
 
-            RemoveEntryList(ModuleCursor);
+            RemoveEntryList(Context->Cursor);
             InsertTailList(&List, &Module->ListEntry);
 
-            ModuleCursor = Cursor;
+            Context->Cursor = Cursor;
             goto again;
         }
     } else if (New->End < Module->Start) {
-        __ModuleSearchBackwards(New->End);
+        __ModuleSearchBackwards(Context, New->End);
 
         After = TRUE;
 
-        if (ModuleCursor == &ModuleList)    // Start of list
+        if (Context->Cursor == &Context->List)    // Start of list
             goto done;
 
-        Module = CONTAINING_RECORD(ModuleCursor, MODULE, ListEntry);
+        Module = CONTAINING_RECORD(Context->Cursor, MODULE, ListEntry);
 
         if (New->Start <= Module->End) {    // Overlap
-            PLIST_ENTRY Cursor = ModuleCursor->Flink;
+            PLIST_ENTRY Cursor = Context->Cursor->Flink;
 
-            RemoveEntryList(ModuleCursor);
+            RemoveEntryList(Context->Cursor);
             InsertTailList(&List, &Module->ListEntry);
 
-            ModuleCursor = Cursor;
+            Context->Cursor = Cursor;
             goto again;
         }
     } else {
         PLIST_ENTRY Cursor;
         
-        Cursor = (ModuleCursor->Flink != &ModuleList) ?
-                 ModuleCursor->Flink :
-                 ModuleCursor->Blink;
+        Cursor = (Context->Cursor->Flink != &Context->List) ?
+                 Context->Cursor->Flink :
+                 Context->Cursor->Blink;
 
-        RemoveEntryList(ModuleCursor);
+        RemoveEntryList(Context->Cursor);
         InsertTailList(&List, &Module->ListEntry);
 
-        ModuleCursor = Cursor;
+        Context->Cursor = Cursor;
         goto again;
     }
 
 done:
     if (After)
-        INSERT_AFTER(ModuleCursor, &New->ListEntry);
+        INSERT_AFTER(Context->Cursor, &New->ListEntry);
     else
-        INSERT_BEFORE(ModuleCursor, &New->ListEntry);
+        INSERT_BEFORE(Context->Cursor, &New->ListEntry);
 
-    ModuleCursor = &New->ListEntry;
+    Context->Cursor = &New->ListEntry;
 
-    ReleaseHighLock(&ModuleLock, Irql);
+    ReleaseHighLock(&Context->Lock, Irql);
 
     while (!IsListEmpty(&List)) {
         PLIST_ENTRY     ListEntry;
@@ -287,7 +294,7 @@ done:
         __ModuleFree(Module);
     }
 
-    __ModuleAudit();
+    __ModuleAudit(Context);
 
     return STATUS_SUCCESS;
 
@@ -307,6 +314,7 @@ ModuleLoad(
     IN  PIMAGE_INFO     ImageInfo
     )
 {
+    PMODULE_CONTEXT     Context = &ModuleContext;
     ANSI_STRING         Ansi;
     PCHAR               Buffer;
     PCHAR               Name;
@@ -334,7 +342,8 @@ ModuleLoad(
     Name = strrchr((const CHAR *)Buffer, '\\');
     Name = (Name == NULL) ? Buffer : (Name + 1);
 
-    status = __ModuleAdd(Name,
+    status = __ModuleAdd(Context,
+                         Name,
                          (ULONG_PTR)ImageInfo->ImageBase,
                          (ULONG_PTR)ImageInfo->ImageSize);
     if (!NT_SUCCESS(status))
@@ -368,16 +377,17 @@ ModuleLookup(
     OUT PULONG_PTR  Offset
     )
 {
+    PMODULE_CONTEXT Context = &ModuleContext;
     PLIST_ENTRY     ListEntry;
     KIRQL           Irql;
 
     *Name = NULL;
     *Offset = 0;
 
-    AcquireHighLock(&ModuleLock, &Irql);
+    AcquireHighLock(&Context->Lock, &Irql);
 
-    for (ListEntry = ModuleList.Flink;
-         ListEntry != &ModuleList;
+    for (ListEntry = Context->List.Flink;
+         ListEntry != &Context->List;
          ListEntry = ListEntry->Flink) {
         PMODULE Module;
 
@@ -391,7 +401,7 @@ ModuleLookup(
         }
     }
 
-    ReleaseHighLock(&ModuleLock, Irql);
+    ReleaseHighLock(&Context->Lock, Irql);
 }
 
 VOID
@@ -399,33 +409,51 @@ ModuleTeardown(
     VOID
     )
 {
+    PMODULE_CONTEXT Context = &ModuleContext;
+
     (VOID) PsRemoveLoadImageNotifyRoutine(ModuleLoad);
 
-    while (!IsListEmpty(&ModuleList)) {
+    Context->Cursor = NULL;
+
+    while (!IsListEmpty(&Context->List)) {
         PLIST_ENTRY ListEntry;
         PMODULE     Module;
 
-        ListEntry = RemoveHeadList(&ModuleList);
-        ASSERT(ListEntry != &ModuleList);
+        ListEntry = RemoveHeadList(&Context->List);
+        ASSERT(ListEntry != &Context->List);
 
         Module = CONTAINING_RECORD(ListEntry, MODULE, ListEntry);
         __ModuleFree(Module);
     }
 
-    RtlZeroMemory(&ModuleList, sizeof (LIST_ENTRY));
+    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
+
+    RtlZeroMemory(&Context->Lock, sizeof (HIGH_LOCK));
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (MODULE_CONTEXT)));
 }
 
 NTSTATUS
 ModuleInitialize(
     VOID)
 {
+    PMODULE_CONTEXT             Context = &ModuleContext;
+    ULONG                       References;
     ULONG                       BufferSize;
     ULONG                       Count;
     PAUX_MODULE_EXTENDED_INFO   QueryInfo;
     ULONG                       Index;
     NTSTATUS                    status;
 
-    InitializeHighLock(&ModuleLock);
+    References = InterlockedIncrement(&Context->References);
+
+    status = STATUS_OBJECTID_EXISTS;
+    if (References != 1)
+        goto fail1;
+
+    InitializeHighLock(&Context->Lock);
 
     (VOID) AuxKlibInitialize();
 
@@ -433,26 +461,27 @@ ModuleInitialize(
                                            sizeof (AUX_MODULE_EXTENDED_INFO),
                                            NULL);
     if (!NT_SUCCESS(status))
-        goto fail1;
+        goto fail2;
 
     status = STATUS_UNSUCCESSFUL;
     if (BufferSize == 0)
-        goto fail2;
+        goto fail3;
 
     Count = BufferSize / sizeof (AUX_MODULE_EXTENDED_INFO);
     QueryInfo = __ModuleAllocate(sizeof (AUX_MODULE_EXTENDED_INFO) * Count);
 
     status = STATUS_NO_MEMORY;
     if (QueryInfo == NULL)
-        goto fail3;
+        goto fail4;
 
     status = AuxKlibQueryModuleInformation(&BufferSize,
                                            sizeof (AUX_MODULE_EXTENDED_INFO),
                                            QueryInfo);
     if (!NT_SUCCESS(status))
-        goto fail4;
+        goto fail5;
 
-    InitializeListHead(&ModuleList);
+    InitializeListHead(&Context->List);
+    Context->Cursor = &Context->List;
 
     for (Index = 0; Index < Count; Index++) {
         PCHAR   Name;
@@ -460,46 +489,48 @@ ModuleInitialize(
         Name = strrchr((const CHAR *)QueryInfo[Index].FullPathName, '\\');
         Name = (Name == NULL) ? (PCHAR)QueryInfo[Index].FullPathName : (Name + 1);
 
-        status = __ModuleAdd(Name,
+        status = __ModuleAdd(Context,
+                             Name,
                              (ULONG_PTR)QueryInfo[Index].BasicInfo.ImageBase,
                              (ULONG_PTR)QueryInfo[Index].ImageSize);
         if (!NT_SUCCESS(status))
-            goto fail5;
+            goto fail6;
     }
 
     status = PsSetLoadImageNotifyRoutine(ModuleLoad);
     if (!NT_SUCCESS(status))
-        goto fail6;
+        goto fail7;
 
     __ModuleFree(QueryInfo);
 
-    __ModuleAudit();
-
     return STATUS_SUCCESS;
+
+fail7:
+    Error("fail7\n");
 
 fail6:
     Error("fail6\n");
 
-fail5:
-    Error("fail5\n");
-
-    while (!IsListEmpty(&ModuleList)) {
+    while (!IsListEmpty(&Context->List)) {
         PLIST_ENTRY ListEntry;
         PMODULE     Module;
 
-        ListEntry = RemoveHeadList(&ModuleList);
-        ASSERT(ListEntry != &ModuleList);
+        ListEntry = RemoveHeadList(&Context->List);
+        ASSERT(ListEntry != &Context->List);
 
         Module = CONTAINING_RECORD(ListEntry, MODULE, ListEntry);
         __ModuleFree(Module);
     }
 
-    RtlZeroMemory(&ModuleList, sizeof (LIST_ENTRY));
+    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
+
+fail5:
+    Error("fail5\n");
+
+    __ModuleFree(QueryInfo);
 
 fail4:
     Error("fail4\n");
-
-    __ModuleFree(QueryInfo);
 
 fail3:
     Error("fail3\n");
@@ -509,6 +540,10 @@ fail2:
 
 fail1:
     Error("fail1 (%08x)\n", status);
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (MODULE_CONTEXT)));    
 
     return status;
 }

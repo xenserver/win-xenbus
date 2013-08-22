@@ -61,7 +61,12 @@ xenbus_coinst_@MAJOR_VERSION@_@MINOR_VERSION@_@MICRO_VERSION@_@BUILD_NUMBER@.dll
 %Citrix%=Citrix,NT$ARCH$
 
 [Citrix.NT$ARCH$]
-%XenBusDesc%=XenBus_Inst,PCI\VEN_@PCI_VENDOR_ID@&DEV_@PCI_DEVICE_ID@&SUBSYS_@PCI_DEVICE_ID@@PCI_VENDOR_ID@&REV_@PCI_REVISION@
+; DisplayName		Section		DeviceID
+; -----------		-------		--------
+
+%XenBusDesc%		=XenBus_Inst,	PCI\VEN_5853&DEV_C000&SUBSYS_C0005853&REV_01
+%XenBusDesc%		=XenBus_Inst,	PCI\VEN_5853&DEV_0002
+%XenBusDesc%		=XenBus_Inst,	PCI\VEN_5853&DEV_0001
 
 [XenBus_Inst] 
 CopyFiles=XenBus_Copyfiles
@@ -94,29 +99,7 @@ AddReg = XenFilt_Parameters
 
 [XenFilt_Parameters]
 HKR,"Parameters",,0x00000010
-
 HKR,"Parameters","FilterDevices",0x00010000,"ACPI\PNP0A03","PCIIDE\IDEChannel"
-HKR,"Parameters","ACPI\PNP0A03",0x00010000,"VIF","VBD"
-
-HKR,"Aliases",,0x00000010
-
-HKR,"Aliases\VIF",,0x00000010
-
-HKR,"Aliases\VIF","0",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#20"
-HKR,"Aliases\VIF","1",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#28"
-HKR,"Aliases\VIF","2",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#30"
-HKR,"Aliases\VIF","3",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#38"
-HKR,"Aliases\VIF","4",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#40"
-HKR,"Aliases\VIF","5",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#48"
-HKR,"Aliases\VIF","6",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#50"
-HKR,"Aliases\VIF","7",0x00000000,"PCI\VEN_10EC&DEV_8139&SUBSYS_00015853&REV_20#58"
-
-HKR,"Aliases\VBD",,0x00000010
-
-HKR,"Aliases\VBD","0",0x00000000,"IDE\DiskQEMU_HARDDISK___________________________0.10.2__#0.0.0"
-HKR,"Aliases\VBD","1",0x00000000,"IDE\DiskQEMU_HARDDISK___________________________0.10.2__#0.1.0"
-HKR,"Aliases\VBD","2",0x00000000,"IDE\DiskQEMU_HARDDISK___________________________0.10.2__#1.0.0"
-HKR,"Aliases\VBD","3",0x00000000,"IDE\DiskQEMU_HARDDISK___________________________0.10.2__#1.1.0"
 
 [XenBus_Inst.CoInstallers]
 CopyFiles=CoInst_CopyFiles
@@ -128,9 +111,9 @@ HKR,,CoInstallers32,0x00010000,"xenbus_coinst_@MAJOR_VERSION@_@MINOR_VERSION@_@M
 [Strings] 
 
 Citrix="Citrix Systems Inc." 
-DiskDesc="Citrix Tools for Virtual Machines" 
-XenBusDesc="Citrix PV Bus"
-XenFiltDesc="Citrix Bus Filter"
+DiskDesc="XenServer Tools for Virtual Machines" 
+XenBusDesc="XenServer PV Bus"
+XenFiltDesc="XenServer Bus Filter"
 
 SERVICE_BOOT_START=0x0 
 SERVICE_SYSTEM_START=0x1 

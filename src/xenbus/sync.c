@@ -35,7 +35,7 @@
 #include <util.h>
 
 #include "sync.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 // Routines to capture all CPUs in a spinning state with interrupts
@@ -321,7 +321,10 @@ again:
             } while (InterlockedCompareExchange(&SyncContext.CompletionCount, New, Old) != Old);
 
             if (Old < CpuCount) {
-                LogQemuPrintf("SYNC: %d < %d\n", Old, CpuCount);
+                LogPrintf(LOG_LEVEL_WARNING,
+                          "SYNC: %d < %d\n",
+                          Old,
+                          CpuCount);
 
 #pragma prefast(suppress:28138) // Use constant rather than variable
                 KeLowerIrql(DISPATCH_LEVEL);

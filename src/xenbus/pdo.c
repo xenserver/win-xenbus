@@ -36,7 +36,6 @@
 #include <ntstrsafe.h>
 #include <util.h>
 
-#include <binding.h>
 #include <shared_info_interface.h>
 #include <evtchn_interface.h>
 #include <debug_interface.h>
@@ -49,10 +48,12 @@
 #include "bus.h"
 #include "driver.h"
 #include "thread.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define PDO_TAG 'ODP'
+
+#define MAXNAMELEN  128
 
 struct _XENBUS_PDO {
     PXENBUS_DX                  Dx;
@@ -62,10 +63,11 @@ struct _XENBUS_PDO {
     PXENBUS_THREAD              DevicePowerThread;
     PIRP                        DevicePowerIrp;
 
+    CHAR                        Class[MAXNAMELEN];
+
     PXENBUS_FDO                 Fdo;
     BOOLEAN                     Missing;
     const CHAR                  *Reason;
-    UCHAR                       Revision;
 
     BUS_INTERFACE_STANDARD      BusInterface;
 
@@ -222,15 +224,74 @@ PdoIsMissing(
 }
 
 static FORCEINLINE VOID
+__PdoSetClass(
+    IN  PXENBUS_PDO     Pdo,
+    IN  PANSI_STRING    Class
+    )
+{
+    NTSTATUS            status;
+
+    status = RtlStringCbPrintfA(Pdo->Class,
+                                MAXNAMELEN,
+                                "%Z",
+                                Class);
+    ASSERT(NT_SUCCESS(status));
+}
+
+static FORCEINLINE PCHAR
+__PdoGetClass(
+    IN  PXENBUS_PDO Pdo
+    )
+{
+    return Pdo->Class;
+}
+
+struct _REVISION_ENTRY {
+    const CHAR  *Name;
+    ULONG       Revision;
+};
+
+static struct _REVISION_ENTRY PdoRevisionTable[] = {
+    { "VIF", 1 },
+    { "VBD", 1 },
+    { "IFACE", 1 },
+    { NULL, 0 }
+};
+
+static FORCEINLINE ULONG
+__PdoGetRevision(
+    IN  PXENBUS_PDO         Pdo
+    )
+{
+    struct _REVISION_ENTRY  *Entry;
+    ULONG                   Revision;
+    
+    Revision = 0;
+    for (Entry = PdoRevisionTable; Entry->Name != NULL; Entry++) {
+        if (strcmp(__PdoGetClass(Pdo), Entry->Name) == 0) {
+            Revision = Entry->Revision;
+            break;
+        }
+    }
+
+    return Revision;
+}
+
+static FORCEINLINE VOID
 __PdoSetName(
     IN  PXENBUS_PDO     Pdo,
-    IN  PANSI_STRING    Ansi
+    IN  PCHAR           VendorName
     )
 {
     PXENBUS_DX          Dx = Pdo->Dx;
     NTSTATUS            status;
 
-    status = RtlStringCbPrintfA(Dx->Name, MAX_DEVICE_ID_LEN, "%Z", Ansi);
+    status = RtlStringCbPrintfA(Dx->Name,
+                                MAX_DEVICE_ID_LEN,
+                                "VEN_%s&DEV_%s&REV_%08X",
+                                VendorName,
+                                __PdoGetClass(Pdo),
+                                __PdoGetRevision(Pdo));
     ASSERT(NT_SUCCESS(status));
 }
 
@@ -250,47 +311,6 @@ PdoGetName(
     )
 {
     return __PdoGetName(Pdo);
-}
-
-struct _REVISION_ENTRY {
-    const CHAR  *Name;
-    UCHAR       Revision;
-};
-
-static struct _REVISION_ENTRY PdoRevisionTable[] = {
-    { "VIF", 0x02 },
-    { "VBD", 0x02 },
-    { "IFACE", 0x02 },
-    { NULL, 0 }
-};
-
-static FORCEINLINE VOID
-__PdoSetRevision(
-    IN  PXENBUS_PDO         Pdo,
-    IN  PANSI_STRING        Name
-    )
-{
-    struct _REVISION_ENTRY  *Entry;
-
-    Pdo->Revision = PCI_REVISION;
-
-    for (Entry = PdoRevisionTable; Entry->Name != NULL; Entry++) {
-        if (strcmp(Name->Buffer, Entry->Name) == 0) {
-            Trace("%s: %02x\n",
-                  __PdoGetName(Pdo),
-                  Entry->Revision);
-            Pdo->Revision = Entry->Revision;
-            break;
-        }
-    }
-}
-
-static FORCEINLINE UCHAR
-__PdoGetRevision(
-    IN  PXENBUS_PDO Pdo
-    )
-{
-    return Pdo->Revision;
 }
 
 static FORCEINLINE PDEVICE_OBJECT
@@ -1494,7 +1514,7 @@ PdoQueryDeviceText(
                                     MAXTEXTLEN,
                                     L"%hs %hs",
                                     FdoGetName(__PdoGetFdo(Pdo)),
-                                    __PdoGetName(Pdo));
+                                    __PdoGetClass(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1505,7 +1525,7 @@ PdoQueryDeviceText(
         status = RtlStringCbPrintfW(Buffer,
                                     MAXTEXTLEN,
                                     L"%hs",
-                                    __PdoGetName(Pdo));
+                                    __PdoGetClass(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1622,9 +1642,8 @@ PdoQueryId(
 
         status = RtlStringCbPrintfW(Buffer,
                                     MAX_DEVICE_ID_LEN,
-                                    L"XENBUS\\CLASS_%hs&REV_%02X",
-                                    __PdoGetName(Pdo),
-                                    __PdoGetRevision(Pdo));
+                                    L"XENBUS\\%hs",
+                                    __PdoGetName(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1640,9 +1659,8 @@ PdoQueryId(
         Length = MAX_DEVICE_ID_LEN;
         status = RtlStringCbPrintfW(Buffer,
                                     Length,
-                                    L"XENBUS\\CLASS_%hs&REV_%02X",
-                                    __PdoGetName(Pdo),
-                                    __PdoGetRevision(Pdo));
+                                    L"XENBUS\\%hs",
+                                    __PdoGetName(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -2240,7 +2258,7 @@ PdoSuspend(
 NTSTATUS
 PdoCreate(
     IN  PXENBUS_FDO     Fdo,
-    IN  PANSI_STRING    Name
+    IN  PANSI_STRING    Class
     )
 {
     PDEVICE_OBJECT      PhysicalDeviceObject;
@@ -2249,7 +2267,7 @@ PdoCreate(
     NTSTATUS            status;
 
 #pragma prefast(suppress:28197) // Possibly leaking memory 'PhysicalDeviceObject'
-    status = IoCreateDevice(DriverObject,
+    status = IoCreateDevice(DriverGetDriverObject(),
                             sizeof(XENBUS_DX),
                             NULL,
                             FILE_DEVICE_UNKNOWN,
@@ -2289,13 +2307,12 @@ PdoCreate(
     if (!NT_SUCCESS(status))
         goto fail5;
 
-    __PdoSetName(Pdo, Name);
-    __PdoSetRevision(Pdo, Name);
+    __PdoSetClass(Pdo, Class);
+    __PdoSetName(Pdo, FdoGetVendorName(Fdo));
 
-    Info("%p (XENBUS\\CLASS_%s&REV_%02X#_)\n",
+    Info("%p (%s)\n",
          PhysicalDeviceObject,
-         __PdoGetName(Pdo),
-         __PdoGetRevision(Pdo));
+         __PdoGetName(Pdo));
 
     Dx->Pdo = Pdo;
     PhysicalDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -2350,16 +2367,15 @@ PdoDestroy(
 
     __PdoUnlink(Pdo);
 
-    Info("%p (XENBUS\\CLASS_%s&REV_%02X) (%s)\n",
+    Info("%p (%s) (%s)\n",
          PhysicalDeviceObject,
          __PdoGetName(Pdo),
-         __PdoGetRevision(Pdo),
          Pdo->Reason);
     Pdo->Reason = NULL;
 
     Dx->Pdo = NULL;
 
-    Pdo->Revision = 0;
+    RtlZeroMemory(Pdo->Class, MAXNAMELEN);
 
     ThreadAlert(Pdo->DevicePowerThread);
     ThreadJoin(Pdo->DevicePowerThread);

@@ -34,7 +34,7 @@
 #include <util.h>
 
 #include "range_set.h"
-#include "log.h"
+#include "dbg_print.h"
 #include "assert.h"
 
 #define RANGE_SET_AUDIT DBG

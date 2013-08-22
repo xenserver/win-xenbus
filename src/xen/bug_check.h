@@ -29,65 +29,18 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XEN_HIGH_H
-#define _XEN_HIGH_H
+#ifndef _XEN_BUG_CHECK_H
+#define _XEN_BUG_CHECK_H
 
 #include <ntddk.h>
 
-#pragma warning(disable:4127)   // conditional expression is constant
+extern NTSTATUS
+BugCheckInitialize(
+    VOID);
 
-typedef LONG    HIGH_LOCK, *PHIGH_LOCK;
+extern VOID
+BugCheckTeardown(
+    VOID
+    );
 
-#define LOCK_MAGIC  0xFEEDFACE
-
-static FORCEINLINE
-__drv_maxIRQL(HIGH_LEVEL)
-__drv_raisesIRQL(HIGH_LEVEL)
-__drv_savesIRQL
-KIRQL
-__AcquireHighLock(
-    IN  PHIGH_LOCK  Lock
-    )
-{
-    KIRQL           Irql;
-
-    KeRaiseIrql(HIGH_LEVEL, &Irql);
-
-    while (InterlockedCompareExchange(Lock, LOCK_MAGIC, 0) != 0)
-        _mm_pause();
-
-    KeMemoryBarrier();
-
-    return Irql;
-}
-
-#define AcquireHighLock(_Lock, _Irql)               \
-        do {                                        \
-            *(_Irql) = __AcquireHighLock(_Lock);    \
-        } while (FALSE)
-
-static FORCEINLINE
-__drv_maxIRQL(HIGH_LEVEL)
-__drv_requiresIRQL(HIGH_LEVEL)
-VOID
-ReleaseHighLock(
-    IN  PHIGH_LOCK                  Lock,
-    IN  __drv_restoresIRQL KIRQL    Irql
-    )
-{
-    KeMemoryBarrier();
-
-    InterlockedExchange(Lock, 0);
-    KeLowerIrql(Irql);
-}
-
-static FORCEINLINE
-VOID
-InitializeHighLock(
-    IN  PHIGH_LOCK  Lock
-    )
-{
-    RtlZeroMemory(&Lock, sizeof (HIGH_LOCK));
-}
-
-#endif  // _XEN_HIGH_H
+#endif  // _XEN_BUG_CHECK_H

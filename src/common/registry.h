@@ -29,8 +29,8 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XENBUS_REGISTRY_H
-#define _XENBUS_REGISTRY_H
+#ifndef _COMMON_REGISTRY_H
+#define _COMMON_REGISTRY_H
 
 #include <ntddk.h>
 
@@ -120,8 +120,9 @@ RegistryQuerySzValue(
     );
 
 extern NTSTATUS
-RegistryQuerySystemStartOptions(
-    OUT PANSI_STRING    *Options
+RegistryQuerySystemStartOption(
+    IN  PCHAR           Name,
+    OUT PANSI_STRING    *Option
     );
 
 extern VOID
@@ -142,4 +143,4 @@ RegistryCloseKey(
     IN  HANDLE  Key
     );
 
-#endif  // _XENBUS_REGISTRY_H
+#endif  // _COMMON_REGISTRY_H

@@ -29,8 +29,8 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _UTIL_H
-#define _UTIL_H
+#ifndef _COMMON_UTIL_H
+#define _COMMON_UTIL_H
 
 #include <ntddk.h>
 
@@ -77,6 +77,32 @@ __ffs(
 
 #define __ffu(_mask)  \
         __ffs(~(_mask))
+
+static FORCEINLINE VOID
+__CpuId(
+    IN  ULONG   Leaf,
+    OUT PULONG  EAX OPTIONAL,
+    OUT PULONG  EBX OPTIONAL,
+    OUT PULONG  ECX OPTIONAL,
+    OUT PULONG  EDX OPTIONAL
+    )
+{
+    ULONG       Value[4] = {0};
+
+    __cpuid(Value, Leaf);
+
+    if (EAX)
+        *EAX = Value[0];
+
+    if (EBX)
+        *EBX = Value[1];
+
+    if (ECX)
+        *ECX = Value[2];
+
+    if (EDX)
+        *EDX = Value[3];
+}
 
 static FORCEINLINE LONG
 __InterlockedAdd(
@@ -193,5 +219,125 @@ __FreePoolWithTag(
 
     ExFreePoolWithTag(Buffer, Tag);
 }
-     
-#endif  // _UTIL_H
+
+static FORCEINLINE PMDL
+__AllocatePage(
+    VOID
+    )
+{
+    PHYSICAL_ADDRESS    LowAddress;
+    PHYSICAL_ADDRESS    HighAddress;
+    LARGE_INTEGER       SkipBytes;
+    SIZE_T              TotalBytes;
+    PMDL                Mdl;
+    PUCHAR              MdlMappedSystemVa;
+    NTSTATUS            status;
+
+    LowAddress.QuadPart = 0ull;
+    HighAddress.QuadPart = ~0ull;
+    SkipBytes.QuadPart = 0ull;
+    TotalBytes = (SIZE_T)PAGE_SIZE;
+
+    Mdl = MmAllocatePagesForMdlEx(LowAddress,
+                                  HighAddress,
+                                  SkipBytes,
+                                  TotalBytes,
+                                  MmCached,
+                                  0);
+
+    status = STATUS_NO_MEMORY;
+    if (Mdl == NULL)
+        goto fail1;
+
+    ASSERT((Mdl->MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA |
+                             MDL_PARTIAL_HAS_BEEN_MAPPED |
+                             MDL_PARTIAL |
+                             MDL_PARENT_MAPPED_SYSTEM_VA |
+                             MDL_SOURCE_IS_NONPAGED_POOL |
+                             MDL_IO_SPACE)) == 0);
+
+    MdlMappedSystemVa = MmMapLockedPagesSpecifyCache(Mdl,
+                                                     KernelMode,
+						                             MmCached,   
+						                             NULL,
+						                             FALSE,
+						                             NormalPagePriority);
+
+    status = STATUS_UNSUCCESSFUL;
+    if (MdlMappedSystemVa == NULL)
+        goto fail2;
+
+    ASSERT3P(MdlMappedSystemVa, ==, Mdl->MappedSystemVa);
+
+    RtlZeroMemory(MdlMappedSystemVa, PAGE_SIZE);
+
+    return Mdl;
+
+fail2:
+    Error("fail2\n");
+
+    MmFreePagesFromMdl(Mdl);
+    ExFreePool(Mdl);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return NULL;
+}
+
+static FORCEINLINE VOID
+__FreePage(
+    IN	PMDL	Mdl
+    )
+{
+    PUCHAR	MdlMappedSystemVa;
+
+    ASSERT(Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA);
+    MdlMappedSystemVa = Mdl->MappedSystemVa;
+
+    RtlFillMemory(MdlMappedSystemVa, PAGE_SIZE, 0xAA);
+    
+    MmUnmapLockedPages(MdlMappedSystemVa, Mdl);
+
+    MmFreePagesFromMdl(Mdl);
+}
+
+static FORCEINLINE PWCHAR
+__wcstok_r(
+    IN      PWCHAR  Buffer,
+    IN      PWCHAR  Delimiter,
+    IN OUT  PWCHAR  *Context
+    )
+{
+    PWCHAR          Token;
+    PWCHAR          End;
+
+    if (Buffer != NULL)
+        *Context = Buffer;
+
+    Token = *Context;
+
+    if (Token == NULL)
+        return NULL;
+
+    while (*Token != L'\0' &&
+           wcschr(Delimiter, *Token) != NULL)
+        Token++;
+
+    if (*Token == L'\0')
+        return NULL;
+
+    End = Token + 1;
+    while (*End != L'\0' &&
+           wcschr(Delimiter, *End) == NULL)
+        End++;
+
+    if (*End != L'\0')
+        *End++ = L'\0';
+
+    *Context = End;
+
+    return Token;
+}
+
+#endif  // _COMMON_UTIL_H
