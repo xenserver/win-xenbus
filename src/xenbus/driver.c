@@ -129,7 +129,7 @@ done:
     Trace("<====\n");
 }
 
-__drv_functionClass(IO_COMPLE7TION_ROUTINE)
+__drv_functionClass(IO_COMPLETION_ROUTINE)
 __drv_sameIRQL
 static NTSTATUS
 DriverQueryIdCompletion(

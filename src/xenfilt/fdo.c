@@ -62,7 +62,7 @@ struct _XENFILT_FDO {
     PXENFILT_THREAD             DevicePowerThread;
     PIRP                        DevicePowerIrp;
 
-    PANSI_STRING                Classes;
+    XENFILT_PDO_TYPE            Type;
     MUTEX                       Mutex;
     ULONG                       References;
 };
@@ -183,6 +183,38 @@ __FdoGetName(
     PXENFILT_DX         Dx = Fdo->Dx;
 
     return Dx->Name;
+}
+
+static FORCEINLINE NTSTATUS
+__FdoSetPdoType(
+    IN  PXENFILT_FDO    Fdo,
+    IN  PANSI_STRING    Ansi
+    )
+{
+    NTSTATUS            status;
+
+    status = STATUS_INVALID_PARAMETER;
+    if (_strnicmp(Ansi->Buffer, "DEVICE", Ansi->Length) == 0)
+        Fdo->Type = XENFILT_PDO_TYPE_DEVICE;
+    else if (_strnicmp(Ansi->Buffer, "DISK", Ansi->Length) == 0)
+        Fdo->Type = XENFILT_PDO_TYPE_DISK;
+    else
+        goto fail1;
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+static FORCEINLINE XENFILT_PDO_TYPE
+__FdoGetPdoType(
+    IN  PXENFILT_FDO    Fdo
+    )
+{
+    return Fdo->Type;
 }
 
 VOID
@@ -314,7 +346,9 @@ __FdoEnumerate(
     for (Index = 0; Index < Count; Index++) {
 #pragma warning(suppress:6385)  // Reading invalid data from 'PhysicalDeviceObject'
         if (PhysicalDeviceObject[Index] != NULL) {
-            (VOID) PdoCreate(Fdo, PhysicalDeviceObject[Index]);
+            (VOID) PdoCreate(Fdo,
+                             PhysicalDeviceObject[Index],
+                             __FdoGetPdoType(Fdo));
             ObDereferenceObject(PhysicalDeviceObject[Index]);
         }
     }
@@ -1766,7 +1800,8 @@ FdoDispatch(
 NTSTATUS
 FdoCreate(
     IN  PDEVICE_OBJECT  PhysicalDeviceObject,
-    IN  PANSI_STRING    Name
+    IN  PANSI_STRING    Name,
+    IN  PANSI_STRING    Type
     )
 {
     PDEVICE_OBJECT      LowerDeviceObject;
@@ -1774,8 +1809,6 @@ FdoCreate(
     PDEVICE_OBJECT      FilterDeviceObject;
     PXENFILT_DX         Dx;
     PXENFILT_FDO        Fdo;
-    HANDLE              ServiceKey;
-    HANDLE              ParametersKey;
     NTSTATUS            status;
 
     LowerDeviceObject = IoGetAttachedDeviceReference(PhysicalDeviceObject);
@@ -1831,21 +1864,9 @@ FdoCreate(
 
     __FdoSetName(Fdo, Name);
 
-    status = RegistryOpenServiceKey(KEY_READ, &ServiceKey);
+    status = __FdoSetPdoType(Fdo, Type);
     if (!NT_SUCCESS(status))
         goto fail6;
-
-    status = RegistryOpenSubKey(ServiceKey, "Parameters", KEY_READ, &ParametersKey);
-    if (!NT_SUCCESS(status))
-        goto fail7;
-
-    status = RegistryQuerySzValue(ParametersKey, Name->Buffer, &Fdo->Classes);
-    if (!NT_SUCCESS(status))
-        Fdo->Classes = NULL;
-
-    RegistryCloseKey(ParametersKey);    
-
-    RegistryCloseKey(ServiceKey);    
 
     InitializeMutex(&Fdo->Mutex);
     InitializeListHead(&Dx->ListEntry);
@@ -1865,11 +1886,6 @@ FdoCreate(
     FilterDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     return STATUS_SUCCESS;
-
-fail7:
-    Error("fail7\n");
-
-    RegistryCloseKey(ServiceKey);    
 
 fail6:
     Error("fail6\n");
@@ -1931,11 +1947,6 @@ FdoDestroy(
     Dx->Fdo = NULL;
 
     RtlZeroMemory(&Fdo->Mutex, sizeof (MUTEX));
-
-    if (Fdo->Classes != NULL) {
-        RegistryFreeSzValue(Fdo->Classes);
-        Fdo->Classes = NULL;
-    }
 
     ThreadAlert(Fdo->DevicePowerThread);
     ThreadJoin(Fdo->DevicePowerThread);

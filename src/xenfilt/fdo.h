@@ -41,11 +41,19 @@ typedef struct _XENFILT_FDO XENFILT_FDO, *PXENFILT_FDO;
 extern NTSTATUS
 FdoCreate(
     IN  PDEVICE_OBJECT  PhysicalDeviceObject,
-    IN  PANSI_STRING    Name
+    IN  PANSI_STRING    Name,
+    IN  PANSI_STRING    Type
     );
 
 extern VOID
 FdoDestroy(
+    IN  PXENFILT_FDO    Fdo
+    );
+
+#include "pdo.h"
+
+extern XENFILT_PDO_TYPE
+FdoGetType(
     IN  PXENFILT_FDO    Fdo
     );
 

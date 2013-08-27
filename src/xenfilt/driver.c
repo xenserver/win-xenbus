@@ -238,28 +238,16 @@ AddDevice(
     )
 {
     HANDLE              ParametersKey;
-    PANSI_STRING        FilterDevices;
     PWCHAR              DeviceID;
     UNICODE_STRING      Unicode;
-    ANSI_STRING         Ansi;
-    ULONG               Index;
+    ANSI_STRING         Name;
+    PANSI_STRING        Type;
     NTSTATUS            status;
 
     ASSERT3P(DriverObject, ==, __DriverGetDriverObject());
 
     ParametersKey = __DriverGetParametersKey();
-
-    FilterDevices = NULL;
-    if (ParametersKey != NULL) {
-        status = RegistryQuerySzValue(ParametersKey,
-                                      "FilterDevices",
-                                      &FilterDevices);
-        ASSERT(IMPLY(!NT_SUCCESS(status), FilterDevices == NULL));
-    } else {
-        FilterDevices = NULL;
-    }
-
-    if (FilterDevices == NULL)
+    if (ParametersKey == NULL)
         goto done;
 
     status = __DriverQueryId(PhysicalDeviceObject, BusQueryDeviceID, &DeviceID);
@@ -268,26 +256,23 @@ AddDevice(
 
     RtlInitUnicodeString(&Unicode, DeviceID);
 
-    status = RtlUnicodeStringToAnsiString(&Ansi, &Unicode, TRUE);
+    status = RtlUnicodeStringToAnsiString(&Name, &Unicode, TRUE);
     if (!NT_SUCCESS(status))
         goto fail2;
 
-    for (Index = 0; FilterDevices[Index].Buffer != NULL; Index++) {
-        PANSI_STRING Device = &FilterDevices[Index];
+    status = RegistryQuerySzValue(ParametersKey,
+                                  Name.Buffer,
+                                  &Type);
+    if (NT_SUCCESS(status)) {
+        status = FdoCreate(PhysicalDeviceObject, &Name, Type);
+        if (!NT_SUCCESS(status))
+            goto fail3;
 
-        if (RtlCompareString(&Ansi, Device, TRUE) == 0) {
-            status = FdoCreate(PhysicalDeviceObject, &Ansi);
-            if (!NT_SUCCESS(status))
-                goto fail3;
-
-            break;
-        }
+        RegistryFreeSzValue(Type);
     }
 
-    RtlFreeAnsiString(&Ansi);
+    RtlFreeAnsiString(&Name);
     ExFreePool(DeviceID);
-
-    RegistryFreeSzValue(FilterDevices);
 
 done:
     return STATUS_SUCCESS;
@@ -295,7 +280,9 @@ done:
 fail3:
     Error("fail3\n");
 
-    RtlFreeAnsiString(&Ansi);
+    RegistryFreeSzValue(Type);
+
+    RtlFreeAnsiString(&Name);
 
 fail2:
     Error("fail2\n");
@@ -303,8 +290,6 @@ fail2:
     ExFreePool(DeviceID);
 
 fail1:
-    RegistryFreeSzValue(FilterDevices);
-
     Error("fail1 (%08x)\n", status);
 
     return status;

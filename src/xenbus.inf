@@ -99,7 +99,8 @@ AddReg = XenFilt_Parameters
 
 [XenFilt_Parameters]
 HKR,"Parameters",,0x00000010
-HKR,"Parameters","FilterDevices",0x00010000,"ACPI\PNP0A03","PCIIDE\IDEChannel"
+HKR,"Parameters","ACPI\PNP0A03",0x00000000,"DEVICE"
+HKR,"Parameters","PCIIDE\IDEChannel",0x00000000,"DISK"
 
 [XenBus_Inst.CoInstallers]
 CopyFiles=CoInst_CopyFiles

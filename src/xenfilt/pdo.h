@@ -39,6 +39,12 @@
 
 typedef struct _XENFILT_PDO XENFILT_PDO, *PXENFILT_PDO;
 
+typedef enum _XENFILT_PDO_TYPE {
+    XENFILT_PDO_TYPE_INVALID = 0,
+    XENFILT_PDO_TYPE_DEVICE,
+    XENFILT_PDO_TYPE_DISK
+} XENFILT_PDO_TYPE, *PXENFILT_PDO_TYPE;
+
 extern VOID
 PdoSetDevicePnpState(
     IN  PXENFILT_PDO        Pdo,
@@ -73,8 +79,9 @@ PdoIsMasked(
 
 extern NTSTATUS
 PdoCreate(
-    IN  PXENFILT_FDO    Fdo,
-    IN  PDEVICE_OBJECT  PhysicalDeviceObject
+    IN  PXENFILT_FDO        Fdo,
+    IN  PDEVICE_OBJECT      PhysicalDeviceObject,
+    IN  XENFILT_PDO_TYPE    Type
     );
 
 extern VOID
