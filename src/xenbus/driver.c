@@ -249,12 +249,12 @@ AddDevice(
 
     ParametersKey = __DriverGetParametersKey();
 
-    ActiveDeviceInstance = NULL;
     if (ParametersKey != NULL) {
         status = RegistryQuerySzValue(ParametersKey,
                                       "ActiveDeviceInstance",
                                       &ActiveDeviceInstance);
-        ASSERT(IMPLY(!NT_SUCCESS(status), ActiveDeviceInstance == NULL));
+        if (!NT_SUCCESS(status))
+            ActiveDeviceInstance = NULL;
     } else {
         ActiveDeviceInstance = NULL;
     }

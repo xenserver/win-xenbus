@@ -260,6 +260,66 @@ FdoGetDmaAdapter(
                                             NumberOfMapRegisters);
 }
 
+BOOLEAN
+FdoTranslateBusAddress(
+    IN      PXENBUS_FDO         Fdo,
+    IN      PHYSICAL_ADDRESS    BusAddress,
+    IN      ULONG               Length,
+    IN OUT  PULONG              AddressSpace,
+    OUT     PPHYSICAL_ADDRESS   TranslatedAddress
+    )
+{
+    PBUS_INTERFACE_STANDARD LowerBusInterface;
+
+    LowerBusInterface = &Fdo->LowerBusInterface;
+
+    return LowerBusInterface->TranslateBusAddress(LowerBusInterface->Context,
+                                                  BusAddress,
+                                                  Length,
+                                                  AddressSpace,
+                                                  TranslatedAddress);
+}
+
+ULONG
+FdoSetBusData(
+    IN  PXENBUS_FDO     Fdo,
+    IN  ULONG           DataType,
+    IN  PVOID           Buffer,
+    IN  ULONG           Offset,
+    IN  ULONG           Length
+    )
+{
+    PBUS_INTERFACE_STANDARD LowerBusInterface;
+
+    LowerBusInterface = &Fdo->LowerBusInterface;
+
+    return LowerBusInterface->SetBusData(LowerBusInterface->Context,
+                                         DataType,
+                                         Buffer,
+                                         Offset,
+                                         Length);
+}
+
+ULONG
+FdoGetBusData(
+    IN  PXENBUS_FDO     Fdo,
+    IN  ULONG           DataType,
+    IN  PVOID           Buffer,
+    IN  ULONG           Offset,
+    IN  ULONG           Length
+    )
+{
+    PBUS_INTERFACE_STANDARD LowerBusInterface;
+
+    LowerBusInterface = &Fdo->LowerBusInterface;
+
+    return LowerBusInterface->GetBusData(LowerBusInterface->Context,
+                                         DataType,
+                                         Buffer,
+                                         Offset,
+                                         Length);
+}
+
 static FORCEINLINE VOID
 __FdoSetVendorName(
     IN  PXENBUS_FDO Fdo,
@@ -301,7 +361,7 @@ __FdoSetName(
 
     status = RtlStringCbPrintfA(Dx->Name,
                                 MAXNAMELEN,
-                                "%s XEN",
+                                "%s XENBUS",
                                 __FdoGetVendorName(Fdo));
     ASSERT(NT_SUCCESS(status));
 }
@@ -872,7 +932,8 @@ FdoScan(
             status = RegistryQuerySzValue(ParametersKey,
                                           "SyntheticClasses",
                                           &SyntheticClasses);
-            ASSERT(IMPLY(!NT_SUCCESS(status), SyntheticClasses == NULL));
+            if (!NT_SUCCESS(status))
+                SyntheticClasses = NULL;
         } else {
             SyntheticClasses = NULL;
         }
@@ -892,7 +953,8 @@ FdoScan(
             status = RegistryQuerySzValue(ParametersKey,
                                           "SupportedClasses",
                                           &SupportedClasses);
-            ASSERT(IMPLY(!NT_SUCCESS(status), SyntheticClasses == NULL));
+            if (!NT_SUCCESS(status))
+                SupportedClasses = NULL;
         } else {
             SupportedClasses = NULL;
         }

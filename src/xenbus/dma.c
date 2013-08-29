@@ -1609,7 +1609,7 @@ DmaGetAdapter(
     // map register related races in Windows 2008
     DeviceDescription->InterfaceType = PCIBus;
 
-    LowerAdapter = FdoGetDmaAdapter(PdoGetFdo(Pdo),
+    LowerAdapter = PdoGetDmaAdapter(Pdo,
                                     DeviceDescription,
                                     NumberOfMapRegisters);
 

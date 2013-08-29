@@ -63,8 +63,6 @@ struct _XENBUS_PDO {
     PXENBUS_THREAD              DevicePowerThread;
     PIRP                        DevicePowerIrp;
 
-    CHAR                        Class[MAXNAMELEN];
-
     PXENBUS_FDO                 Fdo;
     BOOLEAN                     Missing;
     const CHAR                  *Reason;
@@ -224,26 +222,37 @@ PdoIsMissing(
 }
 
 static FORCEINLINE VOID
-__PdoSetClass(
+__PdoSetName(
     IN  PXENBUS_PDO     Pdo,
-    IN  PANSI_STRING    Class
+    IN  PANSI_STRING    Name
     )
 {
+    PXENBUS_DX          Dx = Pdo->Dx;
     NTSTATUS            status;
 
-    status = RtlStringCbPrintfA(Pdo->Class,
-                                MAXNAMELEN,
+    status = RtlStringCbPrintfA(Dx->Name,
+                                MAX_DEVICE_ID_LEN,
                                 "%Z",
-                                Class);
+                                Name);
     ASSERT(NT_SUCCESS(status));
 }
 
 static FORCEINLINE PCHAR
-__PdoGetClass(
+__PdoGetName(
     IN  PXENBUS_PDO Pdo
     )
 {
-    return Pdo->Class;
+    PXENBUS_DX      Dx = Pdo->Dx;
+
+    return Dx->Name;
+}
+
+PCHAR
+PdoGetName(
+    IN  PXENBUS_PDO Pdo
+    )
+{
+    return __PdoGetName(Pdo);
 }
 
 struct _REVISION_ENTRY {
@@ -268,49 +277,13 @@ __PdoGetRevision(
     
     Revision = 0;
     for (Entry = PdoRevisionTable; Entry->Name != NULL; Entry++) {
-        if (strcmp(__PdoGetClass(Pdo), Entry->Name) == 0) {
+        if (strcmp(__PdoGetName(Pdo), Entry->Name) == 0) {
             Revision = Entry->Revision;
             break;
         }
     }
 
     return Revision;
-}
-
-static FORCEINLINE VOID
-__PdoSetName(
-    IN  PXENBUS_PDO     Pdo,
-    IN  PCHAR           VendorName
-    )
-{
-    PXENBUS_DX          Dx = Pdo->Dx;
-    NTSTATUS            status;
-
-    status = RtlStringCbPrintfA(Dx->Name,
-                                MAX_DEVICE_ID_LEN,
-                                "VEN_%s&DEV_%s&REV_%08X",
-                                VendorName,
-                                __PdoGetClass(Pdo),
-                                __PdoGetRevision(Pdo));
-    ASSERT(NT_SUCCESS(status));
-}
-
-static FORCEINLINE PCHAR
-__PdoGetName(
-    IN  PXENBUS_PDO Pdo
-    )
-{
-    PXENBUS_DX      Dx = Pdo->Dx;
-
-    return Dx->Name;
-}
-
-PCHAR
-PdoGetName(
-    IN  PXENBUS_PDO Pdo
-    )
-{
-    return __PdoGetName(Pdo);
 }
 
 static FORCEINLINE PDEVICE_OBJECT
@@ -369,6 +342,14 @@ PdoGetFdo(
     )
 {
     return __PdoGetFdo(Pdo);
+}
+
+static FORCEINLINE PCHAR
+__PdoGetVendorName(
+    IN  PXENBUS_PDO Pdo
+    )
+{
+    return FdoGetVendorName(__PdoGetFdo(Pdo));
 }
 
 static FORCEINLINE PXENBUS_EVTCHN_INTERFACE
@@ -467,8 +448,22 @@ PdoGetSharedInfoInterface(
     return __PdoGetSharedInfoInterface(Pdo);
 }
 
+PDMA_ADAPTER
+PdoGetDmaAdapter(
+    IN  PXENBUS_PDO         Pdo,
+    IN  PDEVICE_DESCRIPTION DeviceDescriptor,
+    OUT PULONG              NumberOfMapRegisters
+    )
+{
+    Trace("<===>\n");
+
+    return FdoGetDmaAdapter(__PdoGetFdo(Pdo),
+                            DeviceDescriptor,
+                            NumberOfMapRegisters);
+}
+
 BOOLEAN
-PdoTranslateAddress(
+PdoTranslateBusAddress(
     IN      PXENBUS_PDO         Pdo,
     IN      PHYSICAL_ADDRESS    BusAddress,
     IN      ULONG               Length,
@@ -476,19 +471,17 @@ PdoTranslateAddress(
     OUT     PPHYSICAL_ADDRESS   TranslatedAddress
     )
 {
-    UNREFERENCED_PARAMETER(Pdo);
-    UNREFERENCED_PARAMETER(BusAddress);
-    UNREFERENCED_PARAMETER(Length);
-    UNREFERENCED_PARAMETER(AddressSpace);
-    UNREFERENCED_PARAMETER(TranslatedAddress);
-
     Trace("<===>\n");
 
-    return FALSE;
+    return FdoTranslateBusAddress(__PdoGetFdo(Pdo),
+                                  BusAddress,
+                                  Length,
+                                  AddressSpace,
+                                  TranslatedAddress);
 }
 
 ULONG
-PdoSetData(
+PdoSetBusData(
     IN  PXENBUS_PDO     Pdo,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
@@ -496,20 +489,17 @@ PdoSetData(
     IN  ULONG           Length
     )
 {
-    UNREFERENCED_PARAMETER(Pdo);
-    UNREFERENCED_PARAMETER(DataType);
-    UNREFERENCED_PARAMETER(Buffer);
-    UNREFERENCED_PARAMETER(Offset);
-    UNREFERENCED_PARAMETER(Length);
+    Trace("<===>\n");
 
-    // This function should not be called. Shout if it is.
-    Warning("<===>\n");
-
-    return 0;
+    return FdoSetBusData(__PdoGetFdo(Pdo),
+                         DataType,
+                         Buffer,
+                         Offset,
+                         Length);
 }
 
 ULONG
-PdoGetData(
+PdoGetBusData(
     IN  PXENBUS_PDO     Pdo,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
@@ -517,16 +507,13 @@ PdoGetData(
     IN  ULONG           Length
     )
 {
-    UNREFERENCED_PARAMETER(Pdo);
-    UNREFERENCED_PARAMETER(DataType);
-    UNREFERENCED_PARAMETER(Buffer);
-    UNREFERENCED_PARAMETER(Offset);
-    UNREFERENCED_PARAMETER(Length);
+    Trace("<===>\n");
 
-    // This function should not be called. Shout if it is.
-    Warning("<===>\n");
-
-    return 0;
+    return FdoGetBusData(__PdoGetFdo(Pdo),
+                         DataType,
+                         Buffer,
+                         Offset,
+                         Length);
 }
 
 static FORCEINLINE VOID
@@ -1514,7 +1501,7 @@ PdoQueryDeviceText(
                                     MAXTEXTLEN,
                                     L"%hs %hs",
                                     FdoGetName(__PdoGetFdo(Pdo)),
-                                    __PdoGetClass(Pdo));
+                                    __PdoGetName(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1525,7 +1512,7 @@ PdoQueryDeviceText(
         status = RtlStringCbPrintfW(Buffer,
                                     MAXTEXTLEN,
                                     L"%hs",
-                                    __PdoGetClass(Pdo));
+                                    __PdoGetName(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1642,8 +1629,10 @@ PdoQueryId(
 
         status = RtlStringCbPrintfW(Buffer,
                                     MAX_DEVICE_ID_LEN,
-                                    L"XENBUS\\%hs",
-                                    __PdoGetName(Pdo));
+                                    L"XENBUS\\VEN_%hs&DEV_%hs&REV_%08X",
+                                    __PdoGetVendorName(Pdo),
+                                    __PdoGetName(Pdo),
+                                    __PdoGetRevision(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -1659,8 +1648,10 @@ PdoQueryId(
         Length = MAX_DEVICE_ID_LEN;
         status = RtlStringCbPrintfW(Buffer,
                                     Length,
-                                    L"XENBUS\\%hs",
-                                    __PdoGetName(Pdo));
+                                    L"XENBUS\\VEN_%hs&DEV_%hs&REV_%08X",
+                                    __PdoGetVendorName(Pdo),
+                                    __PdoGetName(Pdo),
+                                    __PdoGetRevision(Pdo));
         ASSERT(NT_SUCCESS(status));
 
         Buffer += wcslen(Buffer);
@@ -2258,7 +2249,7 @@ PdoSuspend(
 NTSTATUS
 PdoCreate(
     IN  PXENBUS_FDO     Fdo,
-    IN  PANSI_STRING    Class
+    IN  PANSI_STRING    Name
     )
 {
     PDEVICE_OBJECT      PhysicalDeviceObject;
@@ -2295,20 +2286,19 @@ PdoCreate(
 
     Pdo->Dx = Dx;
 
-    status = BusInitialize(Pdo, &Pdo->BusInterface);
+    status = ThreadCreate(PdoSystemPower, Pdo, &Pdo->SystemPowerThread);
     if (!NT_SUCCESS(status))
         goto fail3;
 
-    status = ThreadCreate(PdoSystemPower, Pdo, &Pdo->SystemPowerThread);
+    status = ThreadCreate(PdoDevicePower, Pdo, &Pdo->DevicePowerThread);
     if (!NT_SUCCESS(status))
         goto fail4;
 
-    status = ThreadCreate(PdoDevicePower, Pdo, &Pdo->DevicePowerThread);
+    __PdoSetName(Pdo, Name);
+
+    status = BusInitialize(Pdo, &Pdo->BusInterface);
     if (!NT_SUCCESS(status))
         goto fail5;
-
-    __PdoSetClass(Pdo, Class);
-    __PdoSetName(Pdo, FdoGetVendorName(Fdo));
 
     Info("%p (%s)\n",
          PhysicalDeviceObject,
@@ -2324,14 +2314,16 @@ PdoCreate(
 fail5:
     Error("fail5\n");
 
-    ThreadAlert(Pdo->SystemPowerThread);
-    ThreadJoin(Pdo->SystemPowerThread);
-    Pdo->SystemPowerThread = NULL;
+    ThreadAlert(Pdo->DevicePowerThread);
+    ThreadJoin(Pdo->DevicePowerThread);
+    Pdo->DevicePowerThread = NULL;
 
 fail4:
     Error("fail4\n");
 
-    BusTeardown(&Pdo->BusInterface);
+    ThreadAlert(Pdo->SystemPowerThread);
+    ThreadJoin(Pdo->SystemPowerThread);
+    Pdo->SystemPowerThread = NULL;
 
 fail3:
     Error("fail3\n");
@@ -2375,7 +2367,7 @@ PdoDestroy(
 
     Dx->Pdo = NULL;
 
-    RtlZeroMemory(Pdo->Class, MAXNAMELEN);
+    BusTeardown(&Pdo->BusInterface);
 
     ThreadAlert(Pdo->DevicePowerThread);
     ThreadJoin(Pdo->DevicePowerThread);
@@ -2384,8 +2376,6 @@ PdoDestroy(
     ThreadAlert(Pdo->SystemPowerThread);
     ThreadJoin(Pdo->SystemPowerThread);
     Pdo->SystemPowerThread = NULL;
-
-    BusTeardown(&Pdo->BusInterface);
 
     Pdo->Dx = NULL;
 

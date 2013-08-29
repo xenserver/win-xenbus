@@ -101,11 +101,11 @@ BusTranslateAddress(
 {
     PXENBUS_BUS_CONTEXT         Context = _Context;
 
-    return PdoTranslateAddress(Context->Pdo,
-                               BusAddress,
-                               Length,
-                               AddressSpace,
-                               TranslatedAddress);
+    return PdoTranslateBusAddress(Context->Pdo,
+                                  BusAddress,
+                                  Length,
+                                  AddressSpace,
+                                  TranslatedAddress);
 }
 
 static
@@ -145,7 +145,7 @@ BusGetDmaAdapter(
 static
 __drv_functionClass(GET_SET_DEVICE_DATA)
 ULONG
-BusSetDeviceData(
+BusSetData(
     IN  PVOID           _Context,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
@@ -155,17 +155,17 @@ BusSetDeviceData(
 {
     PXENBUS_BUS_CONTEXT Context = _Context;
 
-    return PdoSetData(Context->Pdo,
-                      DataType,
-                      Buffer,
-                      Offset,
-                      Length);
+    return PdoSetBusData(Context->Pdo,
+                         DataType,
+                         Buffer,
+                         Offset,
+                         Length);
 }
 
 static
 __drv_functionClass(GET_SET_DEVICE_DATA)
 ULONG
-BusGetDeviceData(
+BusGetData(
     IN  PVOID           _Context,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
@@ -175,11 +175,11 @@ BusGetDeviceData(
 {
     PXENBUS_BUS_CONTEXT Context = _Context;
 
-    return PdoGetData(Context->Pdo,
-                      DataType,
-                      Buffer,
-                      Offset,
-                      Length);
+    return PdoGetBusData(Context->Pdo,
+                         DataType,
+                         Buffer,
+                         Offset,
+                         Length);
 }
 
 NTSTATUS
@@ -223,8 +223,8 @@ BusInitialize(
     Interface->InterfaceDereference = BusDereference;
     Interface->TranslateBusAddress = BusTranslateAddress;
     Interface->GetDmaAdapter = BusGetDmaAdapter;
-    Interface->SetBusData = BusSetDeviceData;
-    Interface->GetBusData = BusGetDeviceData;
+    Interface->SetBusData = BusSetData;
+    Interface->GetBusData = BusGetData;
 
     Trace("<====\n");
 

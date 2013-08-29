@@ -36,6 +36,7 @@
 #include "fdo.h"
 #include "pdo.h"
 #include "registry.h"
+#include "emulated.h"
 #include "driver.h"
 #include "dbg_print.h"
 #include "assert.h"
@@ -44,8 +45,9 @@
 extern PULONG       InitSafeBootMode;
 
 typedef struct _XENFILT_DRIVER {
-    PDRIVER_OBJECT      DriverObject;
-    HANDLE              ParametersKey;
+    PDRIVER_OBJECT              DriverObject;
+    HANDLE                      ParametersKey;
+    XENFILT_EMULATED_INTERFACE  EmulatedInterface;
 } XENFILT_DRIVER, *PXENFILT_DRIVER;
 
 static XENFILT_DRIVER   Driver;
@@ -98,6 +100,22 @@ DriverGetParametersKey(
     return __DriverGetParametersKey();
 }
 
+static FORCEINLINE PXENFILT_EMULATED_INTERFACE
+__DriverGetEmulatedInterface(
+    VOID
+    )
+{
+    return &Driver.EmulatedInterface;
+}
+
+PXENFILT_EMULATED_INTERFACE
+DriverGetEmulatedInterface(
+    VOID
+    )
+{
+    return __DriverGetEmulatedInterface();
+}
+
 DRIVER_UNLOAD                       DriverUnload;
 
 VOID
@@ -113,6 +131,8 @@ DriverUnload(
 
     if (*InitSafeBootMode > 0)
         goto done;
+
+    EmulatedTeardown(&Driver.EmulatedInterface);
 
     ParametersKey = __DriverGetParametersKey();
     if (ParametersKey != NULL) {
@@ -390,6 +410,10 @@ DriverEntry(
     if (NT_SUCCESS(status))
         __DriverSetParametersKey(ParametersKey);
 
+    status = EmulatedInitialize(&Driver.EmulatedInterface);
+    if (!NT_SUCCESS(status))
+        goto fail3;
+
     RegistryCloseKey(ServiceKey);
 
     DriverObject->DriverExtension->AddDevice = AddDevice;
@@ -403,6 +427,14 @@ DriverEntry(
 done:
     Trace("<====\n");
     return STATUS_SUCCESS;
+
+fail3:
+    Error("fail3\n");
+
+    if (ParametersKey != NULL) {
+        RegistryCloseKey(ParametersKey);
+        __DriverSetParametersKey(NULL);
+    }
 
 fail2:
     Error("fail2\n");

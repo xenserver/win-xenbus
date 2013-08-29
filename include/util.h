@@ -29,8 +29,8 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _COMMON_UTIL_H
-#define _COMMON_UTIL_H
+#ifndef _UTIL_H
+#define _UTIL_H
 
 #include <ntddk.h>
 
@@ -340,4 +340,4 @@ __wcstok_r(
     return Token;
 }
 
-#endif  // _COMMON_UTIL_H
+#endif  // _UTIL_H

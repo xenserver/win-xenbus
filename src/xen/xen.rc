@@ -43,12 +43,12 @@
 
 #include <version.h>
 
-#define VER_PRODUCTNAME_STR         "Citrix PV Tools for Virtual Machines"
+#define VER_PRODUCTNAME_STR         "XEN"
 #define VER_PRODUCTVERSION          MAJOR_VERSION,MINOR_VERSION,MICRO_VERSION,BUILD_NUMBER
 #define VER_PRODUCTVERSION_STR      MAJOR_VERSION_STR "." MINOR_VERSION_STR "." MICRO_VERSION_STR "." BUILD_NUMBER_STR
 
 #define VER_INTERNALNAME_STR        "XEN.SYS"
-#define VER_FILEDESCRIPTION_STR     "Citrix Xen Hypervisor Interface"
+#define VER_FILEDESCRIPTION_STR     "XEN"
 
 #define VER_FILETYPE                VFT_DRV
 #define VER_FILESUBTYPE             VFT2_DRV_SYSTEM

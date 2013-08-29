@@ -85,6 +85,7 @@ LoadOrderGroup="Boot Bus Extender"
 AddReg = XenBus_Parameters
 
 [XenBus_Parameters]
+HKR,"Parameters",,0x00000010
 HKR,"Parameters","SupportedClasses",0x00010000,"VIF","VBD","IFACE"
 HKR,"Parameters","SyntheticClasses",0x00010000,"IFACE"
 

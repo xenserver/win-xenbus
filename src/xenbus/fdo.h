@@ -99,13 +99,40 @@ FdoGetDmaAdapter(
     OUT PULONG              NumberOfMapRegisters
     );
 
+extern BOOLEAN
+FdoTranslateBusAddress(
+    IN      PXENBUS_FDO         Fdo,
+    IN      PHYSICAL_ADDRESS    BusAddress,
+    IN      ULONG               Length,
+    IN OUT  PULONG              AddressSpace,
+    OUT     PPHYSICAL_ADDRESS   TranslatedAddress
+    );
+
+extern ULONG
+FdoSetBusData(
+    IN  PXENBUS_FDO     Fdo,
+    IN  ULONG           DataType,
+    IN  PVOID           Buffer,
+    IN  ULONG           Offset,
+    IN  ULONG           Length
+    );
+
+extern ULONG
+FdoGetBusData(
+    IN  PXENBUS_FDO     Fdo,
+    IN  ULONG           DataType,
+    IN  PVOID           Buffer,
+    IN  ULONG           Offset,
+    IN  ULONG           Length
+    );
+
 extern PCHAR
-FdoGetName(
+FdoGetVendorName(
     IN  PXENBUS_FDO Fdo
     );
 
-PCHAR
-FdoGetVendorName(
+extern PCHAR
+FdoGetName(
     IN  PXENBUS_FDO Fdo
     );
 

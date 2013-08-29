@@ -29,27 +29,29 @@
  * SUCH DAMAGE.
  */
 
-#include <windows.h>
-#include <ntverp.h>
+#ifndef _XENFILT_EMULATED_H
+#define _XENFILT_EMULATED_H
 
-#undef VER_COMPANYNAME_STR
-#undef VER_PRODUCTNAME_STR
-#undef VER_PRODUCTVERSION
-#undef VER_PRODUCTVERSION_STR
+#include <ntddk.h>
+#include <xen.h>
+#include <emulated_interface.h>
 
-#define	VER_COMPANYNAME_STR         "Citrix Systems Inc."
-#define VER_LEGALCOPYRIGHT_STR      "Copyright " YEAR_STR VER_COMPANYNAME_STR
+struct _XENFILT_EMULATED_INTERFACE {
+    PXENFILT_EMULATED_OPERATIONS    Operations;
+    PXENFILT_EMULATED_CONTEXT       Context;
+};
 
-#include <version.h>
+C_ASSERT(FIELD_OFFSET(XENFILT_EMULATED_INTERFACE, Operations) == (ULONG_PTR)EMULATED_OPERATIONS(NULL));
+C_ASSERT(FIELD_OFFSET(XENFILT_EMULATED_INTERFACE, Context) == (ULONG_PTR)EMULATED_CONTEXT(NULL));
 
-#define VER_PRODUCTNAME_STR         "XENFILT"
-#define VER_PRODUCTVERSION          MAJOR_VERSION,MINOR_VERSION,MICRO_VERSION,BUILD_NUMBER
-#define VER_PRODUCTVERSION_STR      MAJOR_VERSION_STR "." MINOR_VERSION_STR "." MICRO_VERSION_STR "." BUILD_NUMBER_STR
+extern NTSTATUS
+EmulatedInitialize(
+    OUT PXENFILT_EMULATED_INTERFACE Interface
+    );
 
-#define VER_INTERNALNAME_STR        "XENFILT.SYS"
-#define VER_FILEDESCRIPTION_STR     "XENFILT"
+extern VOID
+EmulatedTeardown(
+    IN OUT  PXENFILT_EMULATED_INTERFACE Interface
+    );
 
-#define VER_FILETYPE                VFT_DRV
-#define VER_FILESUBTYPE             VFT2_DRV_SYSTEM
-
-#include <common.ver>
+#endif  // _XENFILT_EMULATED_H

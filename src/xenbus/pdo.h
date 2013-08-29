@@ -69,8 +69,20 @@ PdoGetDeviceObject(
     IN  PXENBUS_PDO Pdo
     );
 
+extern PXENBUS_FDO
+PdoGetFdo(
+    IN  PXENBUS_PDO Pdo
+    );
+
+extern PDMA_ADAPTER
+PdoGetDmaAdapter(
+    IN  PXENBUS_PDO         Pdo,
+    IN  PDEVICE_DESCRIPTION DeviceDescriptor,
+    OUT PULONG              NumberOfMapRegisters
+    );
+
 extern BOOLEAN
-PdoTranslateAddress(
+PdoTranslateBusAddress(
     IN      PXENBUS_PDO         Pdo,
     IN      PHYSICAL_ADDRESS    BusAddress,
     IN      ULONG               Length,
@@ -78,13 +90,8 @@ PdoTranslateAddress(
     OUT     PPHYSICAL_ADDRESS   TranslatedAddress
     );
 
-extern PXENBUS_FDO
-PdoGetFdo(
-    IN  PXENBUS_PDO Pdo
-    );
-
 extern ULONG
-PdoSetData(
+PdoSetBusData(
     IN  PXENBUS_PDO     Pdo,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
@@ -93,7 +100,7 @@ PdoSetData(
     );
 
 extern ULONG
-PdoGetData(
+PdoGetBusData(
     IN  PXENBUS_PDO     Pdo,
     IN  ULONG           DataType,
     IN  PVOID           Buffer,
