@@ -33,6 +33,7 @@
 
 #include <windows.h>
 #include <setupapi.h>
+#include <devguid.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strsafe.h>
@@ -1443,36 +1444,6 @@ fail1:
     return FALSE;
 }
 
-// {4d36e97d-e325-11ce-bfc1-08002be10318}
-DEFINE_GUID(GUID_SYSTEM_DEVICE, 
-            0x4d36e97d,
-            0xe325,
-            0x11ce,
-            0xbf,
-            0xc1,
-            0x08,
-            0x00,
-            0x2b,
-            0xe1,
-            0x03,
-            0x18
-            );
-
-// {4d36e96a-e325-11ce-bfc1-08002be10318}
-DEFINE_GUID(GUID_HDC_DEVICE, 
-            0x4d36e96a,
-            0xe325,
-            0x11ce,
-            0xbf,
-            0xc1,
-            0x08,
-            0x00,
-            0x2b,
-            0xe1,
-            0x03,
-            0x18
-            );
-
 static FORCEINLINE HRESULT
 __DifInstallPreProcess(
     IN  HDEVINFO                    DeviceInfoSet,
@@ -1598,11 +1569,11 @@ __DifInstallPostProcess(
     if (!Active)
         goto done;
 
-    Success = InstallFilter(&GUID_SYSTEM_DEVICE, "XENFILT");
+    Success = InstallFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
     if (!Success)
         goto fail6;
 
-    Success = InstallFilter(&GUID_HDC_DEVICE, "XENFILT");
+    Success = InstallFilter(&GUID_DEVCLASS_HDC, "XENFILT");
     if (!Success)
         goto fail7;
 
@@ -1623,12 +1594,12 @@ done:
 fail8:
     Log("fail8");
 
-    (VOID) RemoveFilter(&GUID_HDC_DEVICE, "XENFILT");
+    (VOID) RemoveFilter(&GUID_DEVCLASS_HDC, "XENFILT");
 
 fail7:
     Log("fail7");
 
-    (VOID) RemoveFilter(&GUID_SYSTEM_DEVICE, "XENFILT");
+    (VOID) RemoveFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
 
 fail6:
     Log("fail6");
@@ -1738,11 +1709,11 @@ __DifRemovePreProcess(
 
     ClearActiveDeviceInstance();
 
-    Success = RemoveFilter(&GUID_HDC_DEVICE, "XENFILT");
+    Success = RemoveFilter(&GUID_DEVCLASS_HDC, "XENFILT");
     if (!Success)
         goto fail1;
 
-    Success = RemoveFilter(&GUID_SYSTEM_DEVICE, "XENFILT");
+    Success = RemoveFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
     if (!Success)
         goto fail2;
 
