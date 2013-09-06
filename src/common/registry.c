@@ -137,21 +137,85 @@ fail1:
 
 NTSTATUS
 RegistryOpenHardwareKey(
-    IN  PDEVICE_OBJECT  DeviceObject,
-    IN  ACCESS_MASK     DesiredAccess,
-    OUT PHANDLE         Key
+    IN  PDEVICE_OBJECT      DeviceObject,
+    IN  ACCESS_MASK         DesiredAccess,
+    OUT PHANDLE             Key
     )
 {
-    NTSTATUS            status;
+    HANDLE                  SubKey;
+    ULONG                   Length;
+    PKEY_NAME_INFORMATION   Info;
+    PWCHAR                  Cursor;
+    UNICODE_STRING          Unicode;
+    OBJECT_ATTRIBUTES       Attributes;
+    NTSTATUS                status;
 
     status = IoOpenDeviceRegistryKey(DeviceObject,
                                      PLUGPLAY_REGKEY_DEVICE,
-                                     DesiredAccess,
-                                     Key);
+                                     KEY_READ,
+                                     &SubKey);
     if (!NT_SUCCESS(status))
         goto fail1;
 
+    Length = 0;
+    (VOID) ZwQueryKey(SubKey,
+                      KeyNameInformation,
+                      NULL,
+                      0,
+                      &Length);
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Length == 0)
+        goto fail2;
+    
+    Info = __RegistryAllocate(Length + sizeof (WCHAR));
+
+    status = STATUS_NO_MEMORY;
+    if (Info == NULL)
+        goto fail3;
+
+    status = ZwQueryKey(SubKey,
+                        KeyNameInformation,
+                        Info,
+                        Length,
+                        &Length);
+    if (!NT_SUCCESS(status))
+        goto fail4;
+
+    Info->Name[Info->NameLength] = '\0';
+
+    Cursor = wcsrchr(Info->Name, L'\\');
+    ASSERT(Cursor != NULL);
+
+    *Cursor = L'\0';
+    
+    RtlInitUnicodeString(&Unicode, Info->Name);
+
+    InitializeObjectAttributes(&Attributes,
+                               &Unicode,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    status = ZwOpenKey(Key,
+                       DesiredAccess,
+                       &Attributes);
+    if (!NT_SUCCESS(status))
+        goto fail5;
+
+    __RegistryFree(Info);
+
+    RegistryCloseKey(SubKey);
+
     return STATUS_SUCCESS;
+
+fail5:
+fail4:
+    __RegistryFree(Info);
+
+fail3:
+fail2:
+    RegistryCloseKey(SubKey);
 
 fail1:
     return status;
@@ -202,13 +266,14 @@ fail1:
 NTSTATUS
 RegistryCreateSubKey(
     IN  PHANDLE         Key,
-    IN  PCHAR           Name
+    IN  PCHAR           Name,
+    IN  ULONG           Options,
+    OUT PHANDLE         SubKey
     )
 {
     ANSI_STRING         Ansi;
     UNICODE_STRING      Unicode;
     OBJECT_ATTRIBUTES   Attributes;
-    HANDLE              SubKey;
     NTSTATUS            status;
 
     RtlInitAnsiString(&Ansi, Name);
@@ -223,18 +288,16 @@ RegistryCreateSubKey(
                                Key,
                                NULL);
 
-    status = ZwCreateKey(&SubKey,
+    status = ZwCreateKey(SubKey,
                          KEY_ALL_ACCESS,
                          &Attributes,
                          0,
                          NULL,
-                         REG_OPTION_NON_VOLATILE,
+                         Options,
                          NULL
                          );
     if (!NT_SUCCESS(status))
         goto fail2;
-
-    ZwClose(SubKey);
 
     RtlFreeUnicodeString(&Unicode);
 

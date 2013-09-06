@@ -29,65 +29,29 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XENFILT_PDO_H
-#define _XENFILT_PDO_H
+#ifndef _XENFILT_UNPLUG_H
+#define _XENFILT_UNPLUG_H
 
 #include <ntddk.h>
+#include <xen.h>
+#include <unplug_interface.h>
 
-#include "types.h"
-#include "fdo.h"
-#include "emulated.h"
+struct _XENFILT_UNPLUG_INTERFACE {
+    PXENFILT_UNPLUG_OPERATIONS    Operations;
+    PXENFILT_UNPLUG_CONTEXT       Context;
+};
 
-typedef struct _XENFILT_PDO XENFILT_PDO, *PXENFILT_PDO;
-
-extern VOID
-PdoSetDevicePnpState(
-    IN  PXENFILT_PDO        Pdo,
-    IN  DEVICE_PNP_STATE    State
-    );
-
-extern DEVICE_PNP_STATE
-PdoGetDevicePnpState(
-    IN  PXENFILT_PDO    Pdo
-    );
-
-extern PDEVICE_OBJECT
-PdoGetPhysicalDeviceObject(
-    IN  PXENFILT_PDO    Pdo
-    );
-
-extern BOOLEAN
-PdoIsMissing(
-    IN  PXENFILT_PDO    Pdo
-    );
-
-extern VOID
-PdoSetMissing(
-    IN  PXENFILT_PDO    Pdo,
-    IN  const CHAR      *Reason
-    );
-
-extern BOOLEAN
-PdoIsMasked(
-    IN  PXENFILT_PDO    Pdo
-    );
+C_ASSERT(FIELD_OFFSET(XENFILT_UNPLUG_INTERFACE, Operations) == (ULONG_PTR)UNPLUG_OPERATIONS(NULL));
+C_ASSERT(FIELD_OFFSET(XENFILT_UNPLUG_INTERFACE, Context) == (ULONG_PTR)UNPLUG_CONTEXT(NULL));
 
 extern NTSTATUS
-PdoCreate(
-    IN  PXENFILT_FDO                    Fdo,
-    IN  PDEVICE_OBJECT                  PhysicalDeviceObject,
-    IN  XENFILT_EMULATED_OBJECT_TYPE    Type
+UnplugInitialize(
+    OUT PXENFILT_UNPLUG_INTERFACE Interface
     );
 
 extern VOID
-PdoDestroy(
-    IN  PXENFILT_PDO    Pdo
+UnplugTeardown(
+    IN OUT  PXENFILT_UNPLUG_INTERFACE Interface
     );
 
-extern NTSTATUS
-PdoDispatch(
-    IN  PXENFILT_PDO    Pdo,
-    IN  PIRP            Irp
-    );
-
-#endif  // _XENFILT_PDO_H
+#endif  // _XENFILT_UNPLUG_H

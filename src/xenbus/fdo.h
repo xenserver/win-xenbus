@@ -34,6 +34,8 @@
 
 #include <ntddk.h>
 
+#include <unplug_interface.h>
+
 #include "driver.h"
 #include "types.h"
 
@@ -144,6 +146,11 @@ FdoGetResource(
 
 extern PKINTERRUPT
 FdoGetInterruptObject(
+    IN  PXENBUS_FDO Fdo
+    );
+
+extern PXENFILT_UNPLUG_INTERFACE
+FdoGetUnplugInterface(
     IN  PXENBUS_FDO Fdo
     );
 

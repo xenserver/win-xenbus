@@ -53,6 +53,14 @@ typedef struct _XEN_DRIVER {
 
 static XEN_DRIVER   Driver;
 
+XEN_API
+VOID
+XenTouch(
+    VOID
+    )
+{
+}
+
 static VOID
 DriverOutputBuffer(
     IN  PVOID   Argument,
@@ -106,15 +114,14 @@ DllInitialize(
                                &Driver.InfoDisposition);
     ASSERT(NT_SUCCESS(status));
 
-    LogPrintf(LOG_LEVEL_INFO,
-              "XEN %d.%d.%d (%d) (%02d.%02d.%04d)\n",
-              MAJOR_VERSION,
-              MINOR_VERSION,
-              MICRO_VERSION,
-              BUILD_NUMBER,
-              DAY,
-              MONTH,
-              YEAR);
+    Info("XEN %d.%d.%d (%d) (%02d.%02d.%04d)\n",
+         MAJOR_VERSION,
+         MINOR_VERSION,
+         MICRO_VERSION,
+         BUILD_NUMBER,
+         DAY,
+         MONTH,
+         YEAR);
 
     SystemGetInformation();
 

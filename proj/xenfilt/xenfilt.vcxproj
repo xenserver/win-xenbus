@@ -76,6 +76,7 @@
 	<ItemGroup>
 		<ClCompile Include="../../src/common/registry.c" />
 		<ClCompile Include="../../src/xenfilt/driver.c" />
+		<ClCompile Include="../../src/xenfilt/unplug.c" />
 		<ClCompile Include="../../src/xenfilt/emulated.c" />
 		<ClCompile Include="../../src/xenfilt/fdo.c" />
 		<ClCompile Include="../../src/xenfilt/pdo.c" />

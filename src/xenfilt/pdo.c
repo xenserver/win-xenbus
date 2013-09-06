@@ -37,6 +37,8 @@
 #include <stdlib.h>
 #include <util.h>
 
+#include "emulated.h"
+#include "unplug.h"
 #include "names.h"
 #include "fdo.h"
 #include "pdo.h"
@@ -49,22 +51,6 @@
 
 #define MAXNAMELEN  128
 
-typedef struct _XENFILT_PDO_DEVICE_DATA {
-    CHAR    DeviceID[MAXNAMELEN];
-    CHAR    InstanceID[MAXNAMELEN];
-} XENFILT_PDO_DEVICE_DATA, *PXENFILT_PDO_DEVICE_DATA;
-
-typedef struct _XENFILT_PDO_DISK_DATA {
-    ULONG   Controller;
-    ULONG   Target;
-    ULONG   Lun;
-} XENFILT_PDO_DISK_DATA, *PXENFILT_PDO_DISK_DATA;
-
-typedef union _XENFILT_PDO_DATA {
-    XENFILT_PDO_DEVICE_DATA Device;
-    XENFILT_PDO_DISK_DATA   Disk;
-} XENFILT_PDO_DATA, *PXENFILT_PDO_DATA;
-
 struct _XENFILT_PDO {
     PXENFILT_DX                 Dx;
     PDEVICE_OBJECT              LowerDeviceObject;
@@ -75,8 +61,8 @@ struct _XENFILT_PDO {
     PXENFILT_THREAD             DevicePowerThread;
     PIRP                        DevicePowerIrp;
 
-    XENFILT_PDO_TYPE            Type;
-    XENFILT_PDO_DATA            Data;
+    PXENFILT_EMULATED_INTERFACE EmulatedInterface;
+    PXENFILT_EMULATED_OBJECT    EmulatedObject;
 
     PXENFILT_FDO                Fdo;
     BOOLEAN                     Missing;
@@ -270,248 +256,36 @@ __PdoGetFdo(
     return Pdo->Fdo;
 }
 
-__drv_functionClass(IO_COMPLETION_ROUTINE)
-__drv_sameIRQL
-static NTSTATUS
-PdoQueryCompletion(
-    IN  PDEVICE_OBJECT  DeviceObject,
-    IN  PIRP            Irp,
-    IN  PVOID           Context
+static FORCEINLINE PXENFILT_EMULATED_INTERFACE
+__PdoGetEmulatedInterface(
+    IN  PXENFILT_PDO Pdo
     )
 {
-    PKEVENT             Event = Context;
-
-    UNREFERENCED_PARAMETER(DeviceObject);
-    UNREFERENCED_PARAMETER(Irp);
-
-    KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
-
-    return STATUS_MORE_PROCESSING_REQUIRED;
+    return Pdo->EmulatedInterface;
 }
 
-static NTSTATUS
-PdoQueryId(
-    IN  PDEVICE_OBJECT      DeviceObject,
-    IN  BUS_QUERY_ID_TYPE   IdType,
-    OUT PVOID               *Information
+PXENFILT_EMULATED_INTERFACE
+PdoGetEmulatedInterface(
+    IN  PXENFILT_PDO Pdo
     )
 {
-    PIRP                    Irp;
-    KEVENT                  Event;
-    PIO_STACK_LOCATION      StackLocation;
-    NTSTATUS                status;
-
-    ASSERT3U(KeGetCurrentIrql(), ==, PASSIVE_LEVEL);
-
-    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
-
-    status = STATUS_INSUFFICIENT_RESOURCES;
-    if (Irp == NULL)
-        goto fail1;
-
-    StackLocation = IoGetNextIrpStackLocation(Irp);
-
-    StackLocation->MajorFunction = IRP_MJ_PNP;
-    StackLocation->MinorFunction = IRP_MN_QUERY_ID;
-    StackLocation->Flags = 0;
-    StackLocation->Parameters.QueryId.IdType = IdType;
-    StackLocation->DeviceObject = DeviceObject;
-    StackLocation->FileObject = NULL;
-
-    KeInitializeEvent(&Event, NotificationEvent, FALSE);
-
-    IoSetCompletionRoutine(Irp,
-                           PdoQueryCompletion,
-                           &Event,
-                           TRUE,
-                           TRUE,
-                           TRUE);
-
-    // Default completion status
-    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-
-    status = IoCallDriver(DeviceObject, Irp);
-    if (status == STATUS_PENDING) {
-        (VOID) KeWaitForSingleObject(&Event,
-                                     Executive,
-                                     KernelMode,
-                                     FALSE,
-                                     NULL);
-        status = Irp->IoStatus.Status;
-    } else {
-        ASSERT3U(status, ==, Irp->IoStatus.Status);
-    }
-
-    if (!NT_SUCCESS(status))
-        goto fail2;
-
-    *Information = (PVOID)Irp->IoStatus.Information;
-
-    IoFreeIrp(Irp);
-
-    return STATUS_SUCCESS;
-
-fail2:
-    IoFreeIrp(Irp);
-
-fail1:
-    return status;
+    return __PdoGetEmulatedInterface(Pdo);
 }
 
-static FORCEINLINE NTSTATUS
-__PdoSetDeviceData(
-    IN  PXENFILT_PDO    Pdo
+static FORCEINLINE PXENFILT_UNPLUG_INTERFACE
+__PdoGetUnplugInterface(
+    IN  PXENFILT_PDO Pdo
     )
 {
-    PWCHAR              DeviceID;
-    PWCHAR              InstanceID;
-    NTSTATUS            status;
-
-    status = PdoQueryId(Pdo->LowerDeviceObject,
-                        BusQueryDeviceID,
-                        &DeviceID);
-    if (NT_SUCCESS(status)) {
-        status = RtlStringCbPrintfA(Pdo->Data.Device.DeviceID,
-                                    MAXNAMELEN,
-                                    "%ws",
-                                    DeviceID);
-        ASSERT(NT_SUCCESS(status));
-
-        ExFreePool(DeviceID);
-    } else {
-        status = RtlStringCbPrintfA(Pdo->Data.Device.DeviceID,
-                                    MAXNAMELEN,
-                                    "UNKNOWN");
-        ASSERT(NT_SUCCESS(status));
-    }
-
-    status = PdoQueryId(Pdo->LowerDeviceObject,
-                        BusQueryInstanceID,
-                        &InstanceID);
-    if (NT_SUCCESS(status)) {
-        status = RtlStringCbPrintfA(Pdo->Data.Device.InstanceID,
-                                    MAXNAMELEN,
-                                    "%ws",
-                                    InstanceID);
-        ASSERT(NT_SUCCESS(status));
-
-        ExFreePool(InstanceID);
-    } else {
-        status = RtlStringCbPrintfA(Pdo->Data.Device.InstanceID,
-                                    MAXNAMELEN,
-                                    "UNKNOWN");
-        ASSERT(NT_SUCCESS(status));
-    }
-
-    Pdo->Type = XENFILT_PDO_TYPE_DEVICE;
-
-    return STATUS_SUCCESS;
+    return FdoGetUnplugInterface(__PdoGetFdo(Pdo));
 }
 
-static FORCEINLINE NTSTATUS
-__PdoSetDiskData(
-    IN  PXENFILT_PDO    Pdo
+PXENFILT_UNPLUG_INTERFACE
+PdoGetUnplugInterface(
+    IN  PXENFILT_PDO Pdo
     )
 {
-    PWCHAR              InstanceID;
-    UNICODE_STRING      Unicode;
-    ANSI_STRING         Ansi;
-    PCHAR               End;
-    ULONG               Controller;
-    ULONG               Target;
-    ULONG               Lun;
-    NTSTATUS            status;
-
-    status = PdoQueryId(Pdo->LowerDeviceObject,
-                        BusQueryInstanceID,
-                        &InstanceID);
-    if (!NT_SUCCESS(status))
-        goto fail1;
-
-    RtlInitUnicodeString(&Unicode, InstanceID);
-
-    status = RtlUnicodeStringToAnsiString(&Ansi, &Unicode, TRUE);
-    if (!NT_SUCCESS(status))
-        goto fail2;
-
-    Controller = strtol(Ansi.Buffer, &End, 10);
-
-    status = STATUS_INVALID_PARAMETER;
-    if (*End != '.')
-        goto fail3;
-
-    End++;
-
-    Target = strtol(End, &End, 10);
-
-    status = STATUS_INVALID_PARAMETER;
-    if (*End != '.')
-        goto fail4;
-
-    End++;
-
-    Lun = strtol(End, &End, 10);
-
-    status = STATUS_INVALID_PARAMETER;
-    if (*End != '\0')
-        goto fail5;
-
-    Pdo->Data.Disk.Controller = Controller;
-    Pdo->Data.Disk.Target = Target;
-    Pdo->Data.Disk.Lun = Lun;
-
-    RtlFreeAnsiString(&Ansi);
-    ExFreePool(InstanceID);
-
-    Pdo->Type = XENFILT_PDO_TYPE_DISK;
-
-    return STATUS_SUCCESS;
-
-fail5:
-    Error("fail5\n");
-
-fail4:
-    Error("fail4\n");
-
-fail3:
-    Error("fail3\n");
-
-    RtlFreeAnsiString(&Ansi);
-
-fail2:
-    Error("fail2\n");
-
-    ExFreePool(InstanceID);
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    return status;
-}
-
-static FORCEINLINE NTSTATUS
-__PdoSetData(
-    IN  PXENFILT_PDO        Pdo,
-    IN  XENFILT_PDO_TYPE    Type
-    )
-{
-    NTSTATUS                status;
-
-    switch (Type) {
-    case XENFILT_PDO_TYPE_DEVICE:
-        status = __PdoSetDeviceData(Pdo);
-        break;
-
-    case XENFILT_PDO_TYPE_DISK:
-        status = __PdoSetDiskData(Pdo);
-        break;
-
-    default:
-        status = STATUS_INVALID_PARAMETER;
-        break;
-    }
-
-    return status;
+    return __PdoGetUnplugInterface(Pdo);
 }
 
 static FORCEINLINE VOID
@@ -520,31 +294,15 @@ __PdoSetName(
     )
 {
     PXENFILT_DX         Dx = Pdo->Dx;
+    const CHAR          *Text;
     NTSTATUS            status;
 
-    switch (Pdo->Type) {
-    case XENFILT_PDO_TYPE_DEVICE:
-        status = RtlStringCbPrintfA(Dx->Name,
-                                    MAX_DEVICE_ID_LEN,
-                                    "DEVICE: %s\\%s",
-                                    Pdo->Data.Device.DeviceID,
-                                    Pdo->Data.Device.InstanceID);
-        break;
+    Text = EmulatedGetObjectText(Pdo->EmulatedObject);
 
-    case XENFILT_PDO_TYPE_DISK:
-        status = RtlStringCbPrintfA(Dx->Name,
-                                    MAX_DEVICE_ID_LEN,
-                                    "DISK: C%d T%d L%d",
-                                    Pdo->Data.Disk.Controller,
-                                    Pdo->Data.Disk.Target,
-                                    Pdo->Data.Disk.Lun);
-        break;
-
-    default:
-        status = STATUS_INVALID_PARAMETER;
-        break;
-    }
-
+    status = RtlStringCbPrintfA(Dx->Name,
+                                MAX_DEVICE_ID_LEN,
+                                "%s",
+                                Text);
     ASSERT(NT_SUCCESS(status));
 }
 
@@ -1074,6 +832,84 @@ __PdoQueryInterface(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS
+PdoQueryEmulatedInterface(
+    IN  PXENFILT_PDO            Pdo,
+    IN  PIRP                    Irp
+    )
+{
+    PIO_STACK_LOCATION          StackLocation;
+    USHORT                      Size;
+    USHORT                      Version;
+    PINTERFACE                  Interface;
+    NTSTATUS                    status;
+
+    status = Irp->IoStatus.Status;        
+
+    StackLocation = IoGetCurrentIrpStackLocation(Irp);
+    Size = StackLocation->Parameters.QueryInterface.Size;
+    Version = StackLocation->Parameters.QueryInterface.Version;
+    Interface = StackLocation->Parameters.QueryInterface.Interface;
+
+    if (StackLocation->Parameters.QueryInterface.Version != EMULATED_INTERFACE_VERSION)
+        goto done;
+
+    status = STATUS_BUFFER_TOO_SMALL;        
+    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
+        goto done;
+
+    Interface->Size = sizeof (INTERFACE);
+    Interface->Version = EMULATED_INTERFACE_VERSION;
+    Interface->Context = __PdoGetEmulatedInterface(Pdo);
+    Interface->InterfaceReference = NULL;
+    Interface->InterfaceDereference = NULL;
+
+    Irp->IoStatus.Information = 0;
+    status = STATUS_SUCCESS;
+
+done:
+    return status;
+}
+
+static NTSTATUS
+PdoQueryUnplugInterface(
+    IN  PXENFILT_PDO            Pdo,
+    IN  PIRP                    Irp
+    )
+{
+    PIO_STACK_LOCATION          StackLocation;
+    USHORT                      Size;
+    USHORT                      Version;
+    PINTERFACE                  Interface;
+    NTSTATUS                    status;
+
+    status = Irp->IoStatus.Status;        
+
+    StackLocation = IoGetCurrentIrpStackLocation(Irp);
+    Size = StackLocation->Parameters.QueryInterface.Size;
+    Version = StackLocation->Parameters.QueryInterface.Version;
+    Interface = StackLocation->Parameters.QueryInterface.Interface;
+
+    if (StackLocation->Parameters.QueryInterface.Version != UNPLUG_INTERFACE_VERSION)
+        goto done;
+
+    status = STATUS_BUFFER_TOO_SMALL;        
+    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
+        goto done;
+
+    Interface->Size = sizeof (INTERFACE);
+    Interface->Version = UNPLUG_INTERFACE_VERSION;
+    Interface->Context = __PdoGetUnplugInterface(Pdo);
+    Interface->InterfaceReference = NULL;
+    Interface->InterfaceDereference = NULL;
+
+    Irp->IoStatus.Information = 0;
+    status = STATUS_SUCCESS;
+
+done:
+    return status;
+}
+
 struct _INTERFACE_ENTRY {
     const GUID  *Guid;
     const CHAR  *Name;
@@ -1084,6 +920,8 @@ struct _INTERFACE_ENTRY {
         { &GUID_ ## _Guid, #_Guid, (_Function) }
 
 struct _INTERFACE_ENTRY PdoInterfaceTable[] = {
+    DEFINE_HANDLER(EMULATED_INTERFACE, PdoQueryEmulatedInterface),
+    DEFINE_HANDLER(UNPLUG_INTERFACE, PdoQueryUnplugInterface),
     { NULL, NULL, NULL }
 };
 
@@ -1943,17 +1781,17 @@ PdoDispatch(
 
 NTSTATUS
 PdoCreate(
-    PXENFILT_FDO                Fdo,
-    PDEVICE_OBJECT              PhysicalDeviceObject,
-    XENFILT_PDO_TYPE            Type
+    PXENFILT_FDO                    Fdo,
+    PDEVICE_OBJECT                  PhysicalDeviceObject,
+    XENFILT_EMULATED_OBJECT_TYPE    Type
     )
 {
-    PDEVICE_OBJECT              LowerDeviceObject;
-    ULONG                       DeviceType;
-    PDEVICE_OBJECT              FilterDeviceObject;
-    PXENFILT_DX                 Dx;
-    PXENFILT_PDO                Pdo;
-    NTSTATUS                    status;
+    PDEVICE_OBJECT                  LowerDeviceObject;
+    ULONG                           DeviceType;
+    PDEVICE_OBJECT                  FilterDeviceObject;
+    PXENFILT_DX                     Dx;
+    PXENFILT_PDO                    Pdo;
+    NTSTATUS                        status;
 
     LowerDeviceObject = IoGetAttachedDeviceReference(PhysicalDeviceObject);
     DeviceType = LowerDeviceObject->DeviceType;
@@ -2006,7 +1844,13 @@ PdoCreate(
     if (!NT_SUCCESS(status))
         goto fail5;
 
-    status = __PdoSetData(Pdo, Type);
+    Pdo->EmulatedInterface = FdoGetEmulatedInterface(Fdo);
+
+    status = EmulatedAddObject(__PdoGetEmulatedInterface(Pdo),
+                               Type,
+                               FdoGetPrefix(Fdo),
+                               Pdo->LowerDeviceObject,
+                               &Pdo->EmulatedObject);
     if (!NT_SUCCESS(status))
         goto fail6;
 
@@ -2093,8 +1937,10 @@ PdoDestroy(
 
     Dx->Pdo = NULL;
 
-    RtlZeroMemory(&Pdo->Data, sizeof (XENFILT_PDO_DATA));
-    Pdo->Type = XENFILT_PDO_TYPE_INVALID;
+    EmulatedRemoveObject(__PdoGetEmulatedInterface(Pdo),
+                         Pdo->EmulatedObject);
+    Pdo->EmulatedObject = NULL;
+    Pdo->EmulatedInterface = NULL;
 
     ThreadAlert(Pdo->DevicePowerThread);
     ThreadJoin(Pdo->DevicePowerThread);

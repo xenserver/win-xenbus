@@ -258,7 +258,6 @@ def archive(filename, files, tgz=False):
     tar = tarfile.open(filename, access)
     for name in files :
         try:
-            print('adding '+name)
             tar.add(name)
         except:
             pass

@@ -36,7 +36,6 @@
 #include "fdo.h"
 #include "pdo.h"
 #include "registry.h"
-#include "emulated.h"
 #include "driver.h"
 #include "dbg_print.h"
 #include "assert.h"
@@ -47,7 +46,7 @@ extern PULONG       InitSafeBootMode;
 typedef struct _XENFILT_DRIVER {
     PDRIVER_OBJECT              DriverObject;
     HANDLE                      ParametersKey;
-    XENFILT_EMULATED_INTERFACE  EmulatedInterface;
+    HANDLE                      UnplugKey;
 } XENFILT_DRIVER, *PXENFILT_DRIVER;
 
 static XENFILT_DRIVER   Driver;
@@ -100,29 +99,38 @@ DriverGetParametersKey(
     return __DriverGetParametersKey();
 }
 
-static FORCEINLINE PXENFILT_EMULATED_INTERFACE
-__DriverGetEmulatedInterface(
+static FORCEINLINE VOID
+__DriverSetUnplugKey(
+    IN  HANDLE  Key
+    )
+{
+    Driver.UnplugKey = Key;
+}
+
+static FORCEINLINE HANDLE
+__DriverGetUnplugKey(
     VOID
     )
 {
-    return &Driver.EmulatedInterface;
+    return Driver.UnplugKey;
 }
 
-PXENFILT_EMULATED_INTERFACE
-DriverGetEmulatedInterface(
+HANDLE
+DriverGetUnplugKey(
     VOID
     )
 {
-    return __DriverGetEmulatedInterface();
+    return __DriverGetUnplugKey();
 }
 
-DRIVER_UNLOAD                       DriverUnload;
+DRIVER_UNLOAD   DriverUnload;
 
 VOID
 DriverUnload(
     IN  PDRIVER_OBJECT  DriverObject
     )
 {
+    HANDLE              UnplugKey;
     HANDLE              ParametersKey;
 
     ASSERT3P(DriverObject, ==, __DriverGetDriverObject());
@@ -132,7 +140,9 @@ DriverUnload(
     if (*InitSafeBootMode > 0)
         goto done;
 
-    EmulatedTeardown(&Driver.EmulatedInterface);
+    UnplugKey = __DriverGetUnplugKey();
+    RegistryCloseKey(UnplugKey);
+    __DriverSetUnplugKey(NULL);
 
     ParametersKey = __DriverGetParametersKey();
     if (ParametersKey != NULL) {
@@ -370,6 +380,7 @@ DriverEntry(
 {
     HANDLE              ServiceKey;
     HANDLE              ParametersKey;
+    HANDLE              UnplugKey;
     ULONG               Index;
     NTSTATUS            status;
 
@@ -388,15 +399,16 @@ DriverEntry(
     if (*InitSafeBootMode > 0)
         goto done;
 
-    LogPrintf(LOG_LEVEL_INFO,
-              "XENFILT %d.%d.%d (%d) (%02d.%02d.%04d)\n",
-              MAJOR_VERSION,
-              MINOR_VERSION,
-              MICRO_VERSION,
-              BUILD_NUMBER,
-              DAY,
-              MONTH,
-              YEAR);
+    XenTouch();
+
+    Info("XENFILT %d.%d.%d (%d) (%02d.%02d.%04d)\n",
+         MAJOR_VERSION,
+         MINOR_VERSION,
+         MICRO_VERSION,
+         BUILD_NUMBER,
+         DAY,
+         MONTH,
+         YEAR);
 
     status = RegistryInitialize(RegistryPath);
     if (!NT_SUCCESS(status))
@@ -410,9 +422,14 @@ DriverEntry(
     if (NT_SUCCESS(status))
         __DriverSetParametersKey(ParametersKey);
 
-    status = EmulatedInitialize(&Driver.EmulatedInterface);
+    status = RegistryCreateSubKey(ServiceKey, 
+                                  "Unplug", 
+                                  REG_OPTION_NON_VOLATILE, 
+                                  &UnplugKey);
     if (!NT_SUCCESS(status))
         goto fail3;
+
+    __DriverSetUnplugKey(UnplugKey);
 
     RegistryCloseKey(ServiceKey);
 

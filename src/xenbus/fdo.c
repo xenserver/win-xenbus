@@ -38,6 +38,8 @@
 #include <util.h>
 #include <xen.h>
 
+#include <unplug_interface.h>
+
 #include "names.h"
 #include "registry.h"
 #include "fdo.h"
@@ -94,6 +96,7 @@ struct _XENBUS_FDO {
     PKINTERRUPT                     InterruptObject;
     BOOLEAN                         InterruptEnabled;
 
+    PXENFILT_UNPLUG_INTERFACE       UnplugInterface;
     XENBUS_SUSPEND_INTERFACE        SuspendInterface;
     XENBUS_SHARED_INFO_INTERFACE    SharedInfoInterface;
     XENBUS_EVTCHN_INTERFACE         EvtchnInterface;
@@ -1299,27 +1302,27 @@ FdoParseResources(
         RawPartialDescriptor = &RawPartialList->PartialDescriptors[Index];
         TranslatedPartialDescriptor = &TranslatedPartialList->PartialDescriptors[Index];
 
-        Info("%s: [%d] %02x:%s\n",
-             __FdoGetName(Fdo),
-             Index,
-             TranslatedPartialDescriptor->Type,
-             PartialResourceDescriptorTypeName(TranslatedPartialDescriptor->Type));
+        Trace("%s: [%d] %02x:%s\n",
+              __FdoGetName(Fdo),
+              Index,
+              TranslatedPartialDescriptor->Type,
+              PartialResourceDescriptorTypeName(TranslatedPartialDescriptor->Type));
 
         switch (TranslatedPartialDescriptor->Type) {
         case CmResourceTypeMemory:
-            Info("RAW: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
-                 RawPartialDescriptor->ShareDisposition,
-                 RawPartialDescriptor->Flags,
-                 RawPartialDescriptor->u.Memory.Start.HighPart,
-                 RawPartialDescriptor->u.Memory.Start.LowPart,
-                 RawPartialDescriptor->u.Memory.Length);
+            Trace("RAW: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
+                  RawPartialDescriptor->ShareDisposition,
+                  RawPartialDescriptor->Flags,
+                  RawPartialDescriptor->u.Memory.Start.HighPart,
+                  RawPartialDescriptor->u.Memory.Start.LowPart,
+                  RawPartialDescriptor->u.Memory.Length);
 
-            Info("TRANSLATED: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
-                 TranslatedPartialDescriptor->ShareDisposition,
-                 TranslatedPartialDescriptor->Flags,
-                 TranslatedPartialDescriptor->u.Memory.Start.HighPart,
-                 TranslatedPartialDescriptor->u.Memory.Start.LowPart,
-                 TranslatedPartialDescriptor->u.Memory.Length);
+            Trace("TRANSLATED: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
+                  TranslatedPartialDescriptor->ShareDisposition,
+                  TranslatedPartialDescriptor->Flags,
+                  TranslatedPartialDescriptor->u.Memory.Start.HighPart,
+                  TranslatedPartialDescriptor->u.Memory.Start.LowPart,
+                  TranslatedPartialDescriptor->u.Memory.Length);
 
             Fdo->Resource[MEMORY_RESOURCE].Raw = *RawPartialDescriptor;
             Fdo->Resource[MEMORY_RESOURCE].Translated = *TranslatedPartialDescriptor;
@@ -1327,19 +1330,19 @@ FdoParseResources(
             break;
 
         case CmResourceTypeInterrupt:
-            Info("RAW: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
-                 RawPartialDescriptor->ShareDisposition,
-                 RawPartialDescriptor->Flags,
-                 RawPartialDescriptor->u.Interrupt.Level,
-                 RawPartialDescriptor->u.Interrupt.Vector,
-                 (PVOID)RawPartialDescriptor->u.Interrupt.Affinity);
+            Trace("RAW: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
+                  RawPartialDescriptor->ShareDisposition,
+                  RawPartialDescriptor->Flags,
+                  RawPartialDescriptor->u.Interrupt.Level,
+                  RawPartialDescriptor->u.Interrupt.Vector,
+                  (PVOID)RawPartialDescriptor->u.Interrupt.Affinity);
 
-            Info("TRANSLATED: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
-                 TranslatedPartialDescriptor->ShareDisposition,
-                 TranslatedPartialDescriptor->Flags,
-                 TranslatedPartialDescriptor->u.Interrupt.Level,
-                 TranslatedPartialDescriptor->u.Interrupt.Vector,
-                 (PVOID)TranslatedPartialDescriptor->u.Interrupt.Affinity);
+            Trace("TRANSLATED: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
+                  TranslatedPartialDescriptor->ShareDisposition,
+                  TranslatedPartialDescriptor->Flags,
+                  TranslatedPartialDescriptor->u.Interrupt.Level,
+                  TranslatedPartialDescriptor->u.Interrupt.Vector,
+                  (PVOID)TranslatedPartialDescriptor->u.Interrupt.Affinity);
 
             Fdo->Resource[INTERRUPT_RESOURCE].Raw = *RawPartialDescriptor;
             Fdo->Resource[INTERRUPT_RESOURCE].Translated = *TranslatedPartialDescriptor;
@@ -1508,6 +1511,14 @@ __FdoDisableInterrupt(
     Fdo->InterruptEnabled = FALSE;
 
     __ReleaseInterruptLock(InterruptObject, Irql);
+}
+
+PXENFILT_UNPLUG_INTERFACE
+FdoGetUnplugInterface(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    return Fdo->UnplugInterface;
 }
 
 PXENBUS_DEBUG_INTERFACE
@@ -3701,6 +3712,79 @@ __FdoReleaseLowerBusInterface(
     RtlZeroMemory(BusInterface, sizeof (BUS_INTERFACE_STANDARD));
 }
 
+static NTSTATUS
+FdoQueryUnplugInterface(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    KEVENT              Event;
+    IO_STATUS_BLOCK     StatusBlock;
+    PIRP                Irp;
+    PIO_STACK_LOCATION  StackLocation;
+    INTERFACE           Interface;
+    NTSTATUS            status;
+
+    ASSERT3U(KeGetCurrentIrql(), ==, PASSIVE_LEVEL);
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    RtlZeroMemory(&StatusBlock, sizeof(IO_STATUS_BLOCK));
+    RtlZeroMemory(&Interface, sizeof(INTERFACE));
+
+    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
+                                       Fdo->LowerDeviceObject,
+                                       NULL,
+                                       0,
+                                       NULL,
+                                       &Event,
+                                       &StatusBlock);
+
+    status = STATUS_UNSUCCESSFUL;
+    if (Irp == NULL)
+        goto fail1;
+
+    StackLocation = IoGetNextIrpStackLocation(Irp);
+    StackLocation->MinorFunction = IRP_MN_QUERY_INTERFACE;
+
+    StackLocation->Parameters.QueryInterface.InterfaceType = &GUID_UNPLUG_INTERFACE;
+    StackLocation->Parameters.QueryInterface.Size = sizeof (INTERFACE);
+    StackLocation->Parameters.QueryInterface.Version = UNPLUG_INTERFACE_VERSION;
+    StackLocation->Parameters.QueryInterface.Interface = &Interface;
+    
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+
+    status = IoCallDriver(Fdo->LowerDeviceObject, Irp);
+    if (status == STATUS_PENDING) {
+        (VOID) KeWaitForSingleObject(&Event,
+                                     Executive,
+                                     KernelMode,
+                                     FALSE,
+                                     NULL);
+        status = StatusBlock.Status;
+    }
+
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Interface.Version != UNPLUG_INTERFACE_VERSION)
+        goto fail3;
+
+    Fdo->UnplugInterface = Interface.Context;
+
+    return STATUS_SUCCESS;
+
+fail3:
+    Error("fail3\n");
+
+fail2:
+    Error("fail2\n");
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
 static FORCEINLINE BOOLEAN
 __FdoIsBalloonEnabled(
     VOID
@@ -3799,6 +3883,10 @@ FdoCreate(
 
     __FdoSetName(Fdo);
 
+    status = FdoQueryUnplugInterface(Fdo);
+    ASSERT(IMPLY(!NT_SUCCESS(status),
+                 FdoGetUnplugInterface(Fdo) == NULL));
+
     __FdoSetActive(Fdo, Active);
 
     if (__FdoIsActive(Fdo) &&
@@ -3825,6 +3913,8 @@ fail7:
     Error("fail7\n");
 
     __FdoSetActive(Fdo, FALSE);
+
+    Fdo->UnplugInterface = NULL;
 
     RtlZeroMemory(Fdo->VendorName, MAXNAMELEN);
 
@@ -3899,6 +3989,8 @@ FdoDestroy(
     }
 
     __FdoSetActive(Fdo, FALSE);
+
+    Fdo->UnplugInterface = NULL;
 
     RtlZeroMemory(Fdo->VendorName, MAXNAMELEN);
 

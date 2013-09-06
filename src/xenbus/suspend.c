@@ -48,13 +48,14 @@ struct _XENBUS_SUSPEND_CALLBACK {
 };
 
 struct _XENBUS_SUSPEND_CONTEXT {
-    LONG                    References;
-    ULONG                   Count;
-    LIST_ENTRY              EarlyList;
-    LIST_ENTRY              LateList;
-    KSPIN_LOCK              Lock;
-    PXENBUS_DEBUG_INTERFACE DebugInterface;
-    PXENBUS_DEBUG_CALLBACK  DebugCallback;
+    LONG                        References;
+    ULONG                       Count;
+    LIST_ENTRY                  EarlyList;
+    LIST_ENTRY                  LateList;
+    KSPIN_LOCK                  Lock;
+    PXENFILT_UNPLUG_INTERFACE   UnplugInterface;
+    PXENBUS_DEBUG_INTERFACE     DebugInterface;
+    PXENBUS_DEBUG_CALLBACK      DebugCallback;
 };
 
 #define SUSPEND_TAG 'PSUS'
@@ -206,6 +207,9 @@ SuspendTrigger(
 
         Context->Count++;
 
+        if (Context->UnplugInterface != NULL)
+            UNPLUG(Replay, Context->UnplugInterface);
+
         for (ListEntry = Context->EarlyList.Flink;
              ListEntry != &Context->EarlyList;
              ListEntry = ListEntry->Flink) {
@@ -335,6 +339,11 @@ SuspendInitialize(
     InitializeListHead(&Context->LateList);
     KeInitializeSpinLock(&Context->Lock);
 
+    Context->UnplugInterface = FdoGetUnplugInterface(Fdo);
+
+    if (Context->UnplugInterface != NULL)
+        UNPLUG(Acquire, Context->UnplugInterface);
+
     Context->DebugInterface = FdoGetDebugInterface(Fdo);
 
     DEBUG(Acquire, Context->DebugInterface);
@@ -392,6 +401,11 @@ SuspendTeardown(
 
     DEBUG(Release, Context->DebugInterface);
     Context->DebugInterface = NULL;
+
+    if (Context->UnplugInterface != NULL) {
+        UNPLUG(Release, Context->UnplugInterface);
+        Context->UnplugInterface = NULL;
+    }
 
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
     RtlZeroMemory(&Context->LateList, sizeof (LIST_ENTRY));

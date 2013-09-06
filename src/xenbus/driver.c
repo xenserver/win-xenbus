@@ -406,15 +406,16 @@ DriverEntry(
 
     Driver.DriverObject->DriverUnload = DriverUnload;
 
-    LogPrintf(LOG_LEVEL_INFO,
-              "XENBUS %d.%d.%d (%d) (%02d.%02d.%04d)\n",
-              MAJOR_VERSION,
-              MINOR_VERSION,
-              MICRO_VERSION,
-              BUILD_NUMBER,
-              DAY,
-              MONTH,
-              YEAR);
+    XenTouch();
+
+    Info("XENBUS %d.%d.%d (%d) (%02d.%02d.%04d)\n",
+         MAJOR_VERSION,
+         MINOR_VERSION,
+         MICRO_VERSION,
+         BUILD_NUMBER,
+         DAY,
+         MONTH,
+         YEAR);
 
     status = RegistryInitialize(RegistryPath);
     if (!NT_SUCCESS(status))

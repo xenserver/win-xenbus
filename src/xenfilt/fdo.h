@@ -50,10 +50,22 @@ FdoDestroy(
     IN  PXENFILT_FDO    Fdo
     );
 
-#include "pdo.h"
+extern PCHAR
+FdoGetPrefix(
+    IN  PXENFILT_FDO    Fdo
+    );
 
-extern XENFILT_PDO_TYPE
-FdoGetType(
+#include "emulated.h"
+
+extern PXENFILT_EMULATED_INTERFACE
+FdoGetEmulatedInterface(
+    IN  PXENFILT_FDO    Fdo
+    );
+
+#include "unplug.h"
+
+extern PXENFILT_UNPLUG_INTERFACE
+FdoGetUnplugInterface(
     IN  PXENFILT_FDO    Fdo
     );
 

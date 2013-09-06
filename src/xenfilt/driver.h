@@ -45,6 +45,11 @@ DriverGetParametersKey(
     VOID
     );
 
+extern HANDLE
+DriverGetUnplugKey(
+    VOID
+    );
+
 #define MAX_DEVICE_ID_LEN   200
 
 #pragma warning(push)

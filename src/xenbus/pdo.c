@@ -697,43 +697,43 @@ PdoParseResources(
         RawPartialDescriptor = &RawPartialList->PartialDescriptors[Index];
         TranslatedPartialDescriptor = &TranslatedPartialList->PartialDescriptors[Index];
 
-        Info("%s: [%d] %02x:%s\n",
-             __PdoGetName(Pdo),
-             Index,
-             TranslatedPartialDescriptor->Type,
-             PartialResourceDescriptorTypeName(TranslatedPartialDescriptor->Type));
+        Trace("%s: [%d] %02x:%s\n",
+              __PdoGetName(Pdo),
+              Index,
+              TranslatedPartialDescriptor->Type,
+              PartialResourceDescriptorTypeName(TranslatedPartialDescriptor->Type));
 
         switch (TranslatedPartialDescriptor->Type) {
         case CmResourceTypeMemory:
-            Info("RAW: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
-                 RawPartialDescriptor->ShareDisposition,
-                 RawPartialDescriptor->Flags,
-                 RawPartialDescriptor->u.Memory.Start.HighPart,
-                 RawPartialDescriptor->u.Memory.Start.LowPart,
-                 RawPartialDescriptor->u.Memory.Length);
+            Trace("RAW: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
+                  RawPartialDescriptor->ShareDisposition,
+                  RawPartialDescriptor->Flags,
+                  RawPartialDescriptor->u.Memory.Start.HighPart,
+                  RawPartialDescriptor->u.Memory.Start.LowPart,
+                  RawPartialDescriptor->u.Memory.Length);
 
-            Info("TRANSLATED: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
-                 TranslatedPartialDescriptor->ShareDisposition,
-                 TranslatedPartialDescriptor->Flags,
-                 TranslatedPartialDescriptor->u.Memory.Start.HighPart,
-                 TranslatedPartialDescriptor->u.Memory.Start.LowPart,
-                 TranslatedPartialDescriptor->u.Memory.Length);
+            Trace("TRANSLATED: SharedDisposition=%02x Flags=%04x Start = %08x.%08x Length = %08x\n",
+                  TranslatedPartialDescriptor->ShareDisposition,
+                  TranslatedPartialDescriptor->Flags,
+                  TranslatedPartialDescriptor->u.Memory.Start.HighPart,
+                  TranslatedPartialDescriptor->u.Memory.Start.LowPart,
+                  TranslatedPartialDescriptor->u.Memory.Length);
             break;
 
         case CmResourceTypeInterrupt:
-            Info("RAW: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
-                 RawPartialDescriptor->ShareDisposition,
-                 RawPartialDescriptor->Flags,
-                 RawPartialDescriptor->u.Interrupt.Level,
-                 RawPartialDescriptor->u.Interrupt.Vector,
-                 (PVOID)RawPartialDescriptor->u.Interrupt.Affinity);
+            Trace("RAW: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
+                  RawPartialDescriptor->ShareDisposition,
+                  RawPartialDescriptor->Flags,
+                  RawPartialDescriptor->u.Interrupt.Level,
+                  RawPartialDescriptor->u.Interrupt.Vector,
+                  (PVOID)RawPartialDescriptor->u.Interrupt.Affinity);
 
-            Info("TRANSLATED: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
-                 TranslatedPartialDescriptor->ShareDisposition,
-                 TranslatedPartialDescriptor->Flags,
-                 TranslatedPartialDescriptor->u.Interrupt.Level,
-                 TranslatedPartialDescriptor->u.Interrupt.Vector,
-                 (PVOID)TranslatedPartialDescriptor->u.Interrupt.Affinity);
+            Trace("TRANSLATED: SharedDisposition=%02x Flags=%04x Level = %08x Vector = %08x Affinity = %p\n",
+                  TranslatedPartialDescriptor->ShareDisposition,
+                  TranslatedPartialDescriptor->Flags,
+                  TranslatedPartialDescriptor->u.Interrupt.Level,
+                  TranslatedPartialDescriptor->u.Interrupt.Vector,
+                  (PVOID)TranslatedPartialDescriptor->u.Interrupt.Affinity);
             break;
 
         default:

@@ -38,6 +38,8 @@
 #include <util.h>
 #include <xen.h>
 
+#include "emulated.h"
+#include "unplug.h"
 #include "names.h"
 #include "fdo.h"
 #include "pdo.h"
@@ -53,18 +55,23 @@
 #define MAXNAMELEN  128
 
 struct _XENFILT_FDO {
-    PXENFILT_DX                 Dx;
-    PDEVICE_OBJECT              LowerDeviceObject;
-    PDEVICE_OBJECT              PhysicalDeviceObject;
+    PXENFILT_DX                     Dx;
+    PDEVICE_OBJECT                  LowerDeviceObject;
+    PDEVICE_OBJECT                  PhysicalDeviceObject;
 
-    PXENFILT_THREAD             SystemPowerThread;
-    PIRP                        SystemPowerIrp;
-    PXENFILT_THREAD             DevicePowerThread;
-    PIRP                        DevicePowerIrp;
+    PXENFILT_THREAD                 SystemPowerThread;
+    PIRP                            SystemPowerIrp;
+    PXENFILT_THREAD                 DevicePowerThread;
+    PIRP                            DevicePowerIrp;
 
-    XENFILT_PDO_TYPE            Type;
-    MUTEX                       Mutex;
-    ULONG                       References;
+    MUTEX                           Mutex;
+    ULONG                           References;
+
+    CHAR                            Prefix[MAXNAMELEN];
+
+    XENFILT_EMULATED_OBJECT_TYPE    Type;
+    XENFILT_EMULATED_INTERFACE      EmulatedInterface;
+    XENFILT_UNPLUG_INTERFACE        UnplugInterface;
 };
 
 static FORCEINLINE PVOID
@@ -186,7 +193,7 @@ __FdoGetName(
 }
 
 static FORCEINLINE NTSTATUS
-__FdoSetPdoType(
+__FdoSetEmulatedType(
     IN  PXENFILT_FDO    Fdo,
     IN  PANSI_STRING    Ansi
     )
@@ -195,9 +202,9 @@ __FdoSetPdoType(
 
     status = STATUS_INVALID_PARAMETER;
     if (_strnicmp(Ansi->Buffer, "DEVICE", Ansi->Length) == 0)
-        Fdo->Type = XENFILT_PDO_TYPE_DEVICE;
+        Fdo->Type = XENFILT_EMULATED_OBJECT_TYPE_DEVICE;
     else if (_strnicmp(Ansi->Buffer, "DISK", Ansi->Length) == 0)
-        Fdo->Type = XENFILT_PDO_TYPE_DISK;
+        Fdo->Type = XENFILT_EMULATED_OBJECT_TYPE_DISK;
     else
         goto fail1;
 
@@ -209,12 +216,80 @@ fail1:
     return status;
 }
 
-static FORCEINLINE XENFILT_PDO_TYPE
-__FdoGetPdoType(
+static FORCEINLINE XENFILT_EMULATED_OBJECT_TYPE
+__FdoGetEmulatedType(
     IN  PXENFILT_FDO    Fdo
     )
 {
     return Fdo->Type;
+}
+
+static FORCEINLINE PDEVICE_OBJECT
+__FdoGetPhysicalDeviceObject(
+    IN  PXENFILT_FDO    Fdo
+    )
+{
+    return Fdo->PhysicalDeviceObject;
+}
+
+static FORCEINLINE NTSTATUS
+__FdoSetPrefix(
+    IN  PXENFILT_FDO        Fdo
+    )
+{
+    HANDLE                  HardwareKey;
+    PANSI_STRING            ParentIdPrefix;
+    NTSTATUS                status;
+
+    status = RegistryOpenHardwareKey(__FdoGetPhysicalDeviceObject(Fdo),
+                                     KEY_READ,
+                                     &HardwareKey);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    status = RegistryQuerySzValue(HardwareKey,
+                                  "ParentIdPrefix",
+                                  &ParentIdPrefix);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = RtlStringCbPrintfA(Fdo->Prefix,
+                                MAXNAMELEN,
+                                "%Z",
+                                ParentIdPrefix);
+    ASSERT(NT_SUCCESS(status));
+
+    RegistryFreeSzValue(ParentIdPrefix);
+
+    RegistryCloseKey(HardwareKey);
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    RegistryCloseKey(HardwareKey);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+static FORCEINLINE PCHAR
+__FdoGetPrefix(
+    IN  PXENFILT_FDO    Fdo
+    )
+{
+    return Fdo->Prefix;
+}
+
+PCHAR
+FdoGetPrefix(
+    IN  PXENFILT_FDO    Fdo
+    )
+{
+    return __FdoGetPrefix(Fdo);
 }
 
 VOID
@@ -348,7 +423,7 @@ __FdoEnumerate(
         if (PhysicalDeviceObject[Index] != NULL) {
             (VOID) PdoCreate(Fdo,
                              PhysicalDeviceObject[Index],
-                             __FdoGetPdoType(Fdo));
+                             __FdoGetEmulatedType(Fdo));
             ObDereferenceObject(PhysicalDeviceObject[Index]);
         }
     }
@@ -362,14 +437,36 @@ fail1:
     Error("fail1 (%08x)\n", status);
 }
 
-static FORCEINLINE VOID
+static FORCEINLINE NTSTATUS
 __FdoS4ToS3(
     IN  PXENFILT_FDO    Fdo
     )
 {
+    KIRQL               Irql;
+    NTSTATUS            status;
+
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemHibernate);
 
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql); // Flush out any attempt to use pageable memory
+
+    status = UnplugInitialize(&Fdo->UnplugInterface);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
     __FdoSetSystemPowerState(Fdo, PowerSystemSleeping3);
+
+    KeLowerIrql(Irql);
+
+    Trace("<====\n");
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    KeLowerIrql(Irql);
+
+    return status;
 }
 
 static FORCEINLINE VOID
@@ -379,7 +476,25 @@ __FdoS3ToS4(
 {
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemSleeping3);
 
+    UnplugTeardown(&Fdo->UnplugInterface);
+
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
+}
+
+PXENFILT_EMULATED_INTERFACE
+FdoGetEmulatedInterface(
+    IN  PXENFILT_FDO     Fdo
+    )
+{
+    return &Fdo->EmulatedInterface;
+}
+
+PXENFILT_UNPLUG_INTERFACE
+FdoGetUnplugInterface(
+    IN  PXENFILT_FDO     Fdo
+    )
+{
+    return &Fdo->UnplugInterface;
 }
 
 __drv_functionClass(IO_COMPLETION_ROUTINE)
@@ -456,7 +571,9 @@ FdoStartDevice(
 
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
 
-    __FdoS4ToS3(Fdo);
+    status = __FdoS4ToS3(Fdo);
+    if (!NT_SUCCESS(status))
+        goto fail3;
 
     __FdoSetSystemPowerState(Fdo, PowerSystemWorking);
 
@@ -475,10 +592,19 @@ FdoStartDevice(
 
     return status;
 
+fail3:
+    Error("fail3\n");
+
+    __FdoSetSystemPowerState(Fdo, PowerSystemShutdown);
+
 fail2:
+    Error("fail2\n");
+
     IoReleaseRemoveLock(&Fdo->Dx->RemoveLock, Irp);
 
 fail1:
+    Error("fail1 (%08x)\n", status);
+
     Irp->IoStatus.Status = status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
@@ -1243,7 +1369,7 @@ __FdoSetSystemPowerUp(
     if (SystemState < PowerSystemHibernate &&
         __FdoGetSystemPowerState(Fdo) >= PowerSystemHibernate) {
         __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
-        __FdoS4ToS3(Fdo);
+        (VOID) __FdoS4ToS3(Fdo);
     }
 
     __FdoSetSystemPowerState(Fdo, SystemState);
@@ -1864,9 +1990,17 @@ FdoCreate(
 
     __FdoSetName(Fdo, Name);
 
-    status = __FdoSetPdoType(Fdo, Type);
+    status = __FdoSetPrefix(Fdo);
     if (!NT_SUCCESS(status))
         goto fail6;
+
+    status = __FdoSetEmulatedType(Fdo, Type);
+    if (!NT_SUCCESS(status))
+        goto fail7;
+
+    status = EmulatedInitialize(&Fdo->EmulatedInterface);
+    if (!NT_SUCCESS(status))
+        goto fail8;
 
     InitializeMutex(&Fdo->Mutex);
     InitializeListHead(&Dx->ListEntry);
@@ -1886,6 +2020,16 @@ FdoCreate(
     FilterDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     return STATUS_SUCCESS;
+
+fail8:
+    Error("fail8\n");
+
+    Fdo->Type = XENFILT_EMULATED_OBJECT_TYPE_INVALID;
+
+fail7:
+    Error("fail7\n");
+
+    RtlZeroMemory(Fdo->Prefix, MAXNAMELEN);
 
 fail6:
     Error("fail6\n");
@@ -1947,6 +2091,12 @@ FdoDestroy(
     Dx->Fdo = NULL;
 
     RtlZeroMemory(&Fdo->Mutex, sizeof (MUTEX));
+
+    EmulatedTeardown(&Fdo->EmulatedInterface);
+
+    Fdo->Type = XENFILT_EMULATED_OBJECT_TYPE_INVALID;
+
+    RtlZeroMemory(Fdo->Prefix, MAXNAMELEN);
 
     ThreadAlert(Fdo->DevicePowerThread);
     ThreadJoin(Fdo->DevicePowerThread);

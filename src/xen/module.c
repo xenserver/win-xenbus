@@ -197,10 +197,10 @@ __ModuleAdd(
     New->Start = Start;
     New->End = Start + Size - 1;
 
-    Info("ADDING: (%p - %p) %s\n",
-         (PVOID)New->Start,
-         (PVOID)New->End,
-         New->Name);
+    Trace("ADDING: (%p - %p) %s\n",
+          (PVOID)New->Start,
+          (PVOID)New->End,
+          New->Name);
 
     InitializeListHead(&List);
 
@@ -286,10 +286,10 @@ done:
 
         Module = CONTAINING_RECORD(ListEntry, MODULE, ListEntry);
 
-        Info("REMOVED: (%p - %p) %s\n",
-             (PVOID)Module->Start,
-             (PVOID)Module->End,
-             Module->Name);
+        Trace("REMOVED: (%p - %p) %s\n",
+              (PVOID)Module->Start,
+              (PVOID)Module->End,
+              Module->Name);
 
         __ModuleFree(Module);
     }

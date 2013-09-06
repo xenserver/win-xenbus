@@ -311,6 +311,7 @@ __DmaReleaseLock(
     if (Irql > DISPATCH_LEVEL)
         return;
 
+#pragma warning(suppress: 26110) // caller failing to hold lock
     KeReleaseSpinLock(Lock, Irql);
 }
 
