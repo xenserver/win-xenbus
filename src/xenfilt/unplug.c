@@ -80,7 +80,7 @@ __UnplugPreamble(
 
     Version = READ_PORT_UCHAR((PUCHAR)0x12);
     if (Version != 0) {
-        WRITE_PORT_USHORT((PUSHORT)0x12, 0x0001);
+        WRITE_PORT_USHORT((PUSHORT)0x12, 0xFFFF);   // FIXME
         WRITE_PORT_ULONG((PULONG)0x10, 
                          (MAJOR_VERSION << 16) |
                          (MINOR_VERSION << 8) |
