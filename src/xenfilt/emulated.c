@@ -467,7 +467,7 @@ EmulatedIsDiskPresent(
 
         EmulatedObject = CONTAINING_RECORD(ListEntry, XENFILT_EMULATED_OBJECT, ListEntry);
 
-        if (EmulatedObject->Type != XENFILT_EMULATED_OBJECT_TYPE_DISK &&
+        if (EmulatedObject->Type == XENFILT_EMULATED_OBJECT_TYPE_DISK &&
             Controller == EmulatedObject->Data.Disk.Controller &&
             Target == EmulatedObject->Data.Disk.Target &&
             Lun == EmulatedObject->Data.Disk.Lun)
