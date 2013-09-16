@@ -570,6 +570,55 @@ LogQemuPrintf(
     va_end(Arguments);
 }
 
+
+static DECLSPEC_NOINLINE VOID
+__LogCchPuts(
+    IN  ULONG       Count,
+    IN  const CHAR  *Message
+    )
+{
+    CHAR            Character;
+
+    while ((Character = *Message++) != '\0') {
+        __LogPut(Character);
+        if (--Count == 0)
+            break;
+    }
+}
+
+static VOID
+LogQemuCchPuts(
+    IN  ULONG       Count,
+    IN  const CHAR  *Message
+    )
+{
+    KIRQL           Irql;
+
+    Irql = __LogAcquireBuffer();
+
+    __LogCchPuts(__min(Count, LOG_BUFFER_SIZE),
+                 Message);
+
+    __LogReleaseBuffer(LOG_QEMU_PORT, Irql);
+}
+
+static VOID
+LogXenCchPuts(
+    IN  ULONG       Count,
+    IN  const CHAR  *Message
+    )
+{
+    KIRQL           Irql;
+
+    Irql = __LogAcquireBuffer();
+
+    __LogCchPuts(__min(Count, LOG_BUFFER_SIZE),
+                 Message);
+
+    __LogReleaseBuffer(LOG_XEN_PORT, Irql);
+}
+
+
 typedef VOID
 (*DBG_PRINT_CALLBACK)(
     PANSI_STRING    Ansi,
@@ -590,26 +639,26 @@ LogDebugPrint(
     if (ComponentId == DPFLTR_IHVDRIVER_ID) {
         switch (Level) {
         case DPFLTR_ERROR_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
+            LogQemuCchPuts(Ansi->Length, Ansi->Buffer);
             break;
 
         case DPFLTR_WARNING_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
+            LogQemuCchPuts(Ansi->Length, Ansi->Buffer);
             break;
 
         case DPFLTR_INFO_LEVEL:
-            LogQemuCchPrintf(Ansi->Length, Ansi->Buffer);
+            LogQemuCchPuts(Ansi->Length, Ansi->Buffer);
             break;
 
         case DPFLTR_TRACE_LEVEL:
-            LogXenCchPrintf(Ansi->Length, Ansi->Buffer);
+            LogXenCchPuts(Ansi->Length, Ansi->Buffer);
             break;
 
         default:
             break;
         }
     } else {
-        LogXenCchPrintf(Ansi->Length, Ansi->Buffer);
+        LogXenCchPuts(Ansi->Length, Ansi->Buffer);
     }
 }
 
