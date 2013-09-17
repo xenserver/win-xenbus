@@ -422,10 +422,7 @@ DriverEntry(
     if (NT_SUCCESS(status))
         __DriverSetParametersKey(ParametersKey);
 
-    status = RegistryCreateSubKey(ServiceKey, 
-                                  "Unplug", 
-                                  REG_OPTION_NON_VOLATILE, 
-                                  &UnplugKey);
+    status = RegistryOpenSubKey(ServiceKey, "Unplug", KEY_READ, &UnplugKey);
     if (!NT_SUCCESS(status))
         goto fail3;
 

@@ -359,6 +359,30 @@ FdoReleaseMutex(
         FdoDestroy(Fdo);
 }
 
+PXENFILT_EMULATED_INTERFACE
+FdoGetEmulatedInterface(
+    IN  PXENFILT_FDO     Fdo
+    )
+{
+    return &Fdo->EmulatedInterface;
+}
+
+static FORCEINLINE PXENFILT_UNPLUG_INTERFACE
+__FdoGetUnplugInterface(
+    IN  PXENFILT_FDO     Fdo
+    )
+{
+    return &Fdo->UnplugInterface;
+}
+
+PXENFILT_UNPLUG_INTERFACE
+FdoGetUnplugInterface(
+    IN  PXENFILT_FDO     Fdo
+    )
+{
+    return __FdoGetUnplugInterface(Fdo);
+}
+
 static FORCEINLINE VOID
 __FdoEnumerate(
     IN  PXENFILT_FDO        Fdo,
@@ -437,36 +461,27 @@ fail1:
     Error("fail1 (%08x)\n", status);
 }
 
-static FORCEINLINE NTSTATUS
+static FORCEINLINE VOID
 __FdoS4ToS3(
-    IN  PXENFILT_FDO    Fdo
+    IN  PXENFILT_FDO            Fdo
     )
 {
-    KIRQL               Irql;
-    NTSTATUS            status;
+    KIRQL                       Irql;
+    PXENFILT_UNPLUG_INTERFACE   UnplugInterface;
 
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemHibernate);
 
     KeRaiseIrql(DISPATCH_LEVEL, &Irql); // Flush out any attempt to use pageable memory
 
-    status = UnplugInitialize(&Fdo->UnplugInterface);
-    if (!NT_SUCCESS(status))
-        goto fail1;
+    UnplugInterface = __FdoGetUnplugInterface(Fdo);
+
+    UNPLUG(Acquire, UnplugInterface);
+    UNPLUG(Replay, UnplugInterface);
+    UNPLUG(Release, UnplugInterface);
 
     __FdoSetSystemPowerState(Fdo, PowerSystemSleeping3);
 
     KeLowerIrql(Irql);
-
-    Trace("<====\n");
-
-    return STATUS_SUCCESS;
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    KeLowerIrql(Irql);
-
-    return status;
 }
 
 static FORCEINLINE VOID
@@ -476,25 +491,7 @@ __FdoS3ToS4(
 {
     ASSERT3U(__FdoGetSystemPowerState(Fdo), ==, PowerSystemSleeping3);
 
-    UnplugTeardown(&Fdo->UnplugInterface);
-
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
-}
-
-PXENFILT_EMULATED_INTERFACE
-FdoGetEmulatedInterface(
-    IN  PXENFILT_FDO     Fdo
-    )
-{
-    return &Fdo->EmulatedInterface;
-}
-
-PXENFILT_UNPLUG_INTERFACE
-FdoGetUnplugInterface(
-    IN  PXENFILT_FDO     Fdo
-    )
-{
-    return &Fdo->UnplugInterface;
 }
 
 __drv_functionClass(IO_COMPLETION_ROUTINE)
@@ -571,10 +568,8 @@ FdoStartDevice(
 
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
 
-    status = __FdoS4ToS3(Fdo);
-    if (!NT_SUCCESS(status))
-        goto fail3;
-
+    __FdoS4ToS3(Fdo);
+    
     __FdoSetSystemPowerState(Fdo, PowerSystemWorking);
 
     __FdoSetDevicePowerState(Fdo, PowerDeviceD0);
@@ -591,11 +586,6 @@ FdoStartDevice(
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
     return status;
-
-fail3:
-    Error("fail3\n");
-
-    __FdoSetSystemPowerState(Fdo, PowerSystemShutdown);
 
 fail2:
     Error("fail2\n");
@@ -1369,7 +1359,7 @@ __FdoSetSystemPowerUp(
     if (SystemState < PowerSystemHibernate &&
         __FdoGetSystemPowerState(Fdo) >= PowerSystemHibernate) {
         __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
-        (VOID) __FdoS4ToS3(Fdo);
+        __FdoS4ToS3(Fdo);
     }
 
     __FdoSetSystemPowerState(Fdo, SystemState);
@@ -2002,6 +1992,10 @@ FdoCreate(
     if (!NT_SUCCESS(status))
         goto fail8;
 
+    status = UnplugInitialize(&Fdo->UnplugInterface);
+    if (!NT_SUCCESS(status))
+        goto fail9;
+
     InitializeMutex(&Fdo->Mutex);
     InitializeListHead(&Dx->ListEntry);
     Fdo->References = 1;
@@ -2020,6 +2014,11 @@ FdoCreate(
     FilterDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     return STATUS_SUCCESS;
+
+fail9:
+    Error("fail9\n");
+
+    EmulatedTeardown(&Fdo->EmulatedInterface);
 
 fail8:
     Error("fail8\n");
@@ -2091,6 +2090,8 @@ FdoDestroy(
     Dx->Fdo = NULL;
 
     RtlZeroMemory(&Fdo->Mutex, sizeof (MUTEX));
+
+    UnplugTeardown(&Fdo->UnplugInterface);
 
     EmulatedTeardown(&Fdo->EmulatedInterface);
 

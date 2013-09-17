@@ -98,8 +98,8 @@ __Log(
 #define Log(_Format, ...) \
         __Log(__MODULE__ "|" __FUNCTION__ ": " _Format, __VA_ARGS__)
 
-static PTCHAR
-GetErrorMessage(
+static FORCEINLINE PTCHAR
+__GetErrorMessage(
     IN  DWORD   Error
     )
 {
@@ -126,8 +126,8 @@ GetErrorMessage(
     return Message;
 }
 
-static const CHAR *
-FunctionName(
+static FORCEINLINE const CHAR *
+__FunctionName(
     IN  DI_FUNCTION Function
     )
 {
@@ -205,7 +205,7 @@ fail1:
 
     {
         PTCHAR  Message;
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -251,7 +251,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -352,7 +352,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -404,7 +404,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -556,7 +556,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -588,7 +588,7 @@ fail1:
 
     {
         PTCHAR  Message;
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -635,7 +635,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -699,7 +699,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -793,7 +793,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -877,7 +877,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -925,7 +925,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -997,63 +997,12 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
 
     return NULL;
-}
-
-static BOOLEAN
-SetFriendlyName(
-    IN  HDEVINFO            DeviceInfoSet,
-    IN  PSP_DEVINFO_DATA    DeviceInfoData,
-    IN  WORD                DeviceId,
-    IN  BOOLEAN             Active
-    )
-{
-    TCHAR                   FriendlyName[MAX_PATH];
-    DWORD                   FriendlyNameLength;
-    HRESULT                 Result;
-    HRESULT                 Error;
-
-    Result = StringCbPrintf(FriendlyName,
-                            MAX_PATH,
-                            "XenServer PV Bus (%04X) %s",
-                            DeviceId,
-                            (Active)? "[ACTIVE]" : "");
-    if (!SUCCEEDED(Result))
-        goto fail1;
-
-    Log("%s", FriendlyName);
-
-    FriendlyNameLength = (DWORD)(strlen(FriendlyName) + sizeof (TCHAR));
-
-    if (!SetupDiSetDeviceRegistryProperty(DeviceInfoSet,
-                                          DeviceInfoData,
-                                          SPDRP_FRIENDLYNAME,
-                                          (PBYTE)FriendlyName,
-                                          FriendlyNameLength))
-        goto fail2;
-
-    return TRUE;
-
-fail2:
-    Log("fail2");
-
-fail1:
-    Error = GetLastError();
-
-    {
-        PTCHAR  Message;
-
-        Message = GetErrorMessage(Error);
-        Log("fail1 (%s)", Message);
-        LocalFree(Message);
-    }
-
-    return FALSE;
 }
 
 static BOOLEAN
@@ -1217,7 +1166,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1507,7 +1456,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1526,7 +1475,6 @@ __DifInstallPostProcess(
     PTCHAR                          DeviceInstance;
     PTCHAR                          ActiveDeviceInstance;
     DWORD                           DeviceId;
-    BOOLEAN                         Active;
     BOOLEAN                         Success;
 
     Log("====>");
@@ -1554,32 +1502,21 @@ __DifInstallPostProcess(
         goto fail4;
     }
 
-    Active = (ActiveDeviceInstance != NULL &&
-              strcmp(DeviceInstance, ActiveDeviceInstance) == 0) ?
-             TRUE :
-             FALSE;
-
-    Success = SetFriendlyName(DeviceInfoSet,
-                              DeviceInfoData,
-                              (WORD)DeviceId,
-                              Active);
-    if (!Success)
-        goto fail5;
-
-    if (!Active)
+    if (ActiveDeviceInstance == NULL ||
+        strcmp(DeviceInstance, ActiveDeviceInstance) != 0)
         goto done;
 
     Success = InstallFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
     if (!Success)
-        goto fail6;
+        goto fail5;
 
     Success = InstallFilter(&GUID_DEVCLASS_HDC, "XENFILT");
     if (!Success)
-        goto fail7;
+        goto fail6;
 
     Success = RequestReboot(DeviceInfoSet, DeviceInfoData);
     if (!Success)
-        goto fail8;
+        goto fail7;
 
 done:
     if (ActiveDeviceInstance != NULL)
@@ -1591,18 +1528,15 @@ done:
 
     return NO_ERROR;
 
-fail8:
-    Log("fail8");
-
-    (VOID) RemoveFilter(&GUID_DEVCLASS_HDC, "XENFILT");
-
 fail7:
     Log("fail7");
 
-    (VOID) RemoveFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
+    (VOID) RemoveFilter(&GUID_DEVCLASS_HDC, "XENFILT");
 
 fail6:
     Log("fail6");
+
+    (VOID) RemoveFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
 
 fail5:
     Log("fail5");
@@ -1627,7 +1561,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1666,7 +1600,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1751,7 +1685,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1789,7 +1723,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1828,7 +1762,7 @@ fail1:
     {
         PTCHAR  Message;
 
-        Message = GetErrorMessage(Error);
+        Message = __GetErrorMessage(Error);
         Log("fail1 (%s)", Message);
         LocalFree(Message);
     }
@@ -1852,10 +1786,10 @@ Entry(
 
     if (!Context->PostProcessing) {
         Log("%s PreProcessing",
-            FunctionName(Function));
+            __FunctionName(Function));
     } else {
         Log("%s PostProcessing (%08x)",
-            FunctionName(Function),
+            __FunctionName(Function),
             Context->InstallResult);
     }
 

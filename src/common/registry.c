@@ -182,7 +182,7 @@ RegistryOpenHardwareKey(
     if (!NT_SUCCESS(status))
         goto fail4;
 
-    Info->Name[Info->NameLength] = '\0';
+    Info->Name[Info->NameLength / sizeof (WCHAR)] = '\0';
 
     Cursor = wcsrchr(Info->Name, L'\\');
     ASSERT(Cursor != NULL);

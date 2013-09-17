@@ -629,12 +629,31 @@ __FdoEnumerate(
     )
 {
     BOOLEAN             NeedInvalidate;
+    HANDLE              ParametersKey;
+    ULONG               Enumerate;
     PLIST_ENTRY         ListEntry;
     ULONG               Index;
 
     Trace("====>\n");
 
     NeedInvalidate = FALSE;
+
+    ParametersKey = DriverGetParametersKey();
+
+    if (ParametersKey != NULL) {
+        NTSTATUS    status;
+
+        status = RegistryQueryDwordValue(ParametersKey,
+                                         "Enumerate",
+                                         &Enumerate);
+        if (!NT_SUCCESS(status))
+            Enumerate = 1;
+    } else {
+        Enumerate = 1;
+    }
+
+    if (Enumerate == 0)
+        goto done;
 
     __FdoAcquireMutex(Fdo);
 
@@ -698,6 +717,7 @@ __FdoEnumerate(
 
     __FdoReleaseMutex(Fdo);
 
+done:
     Trace("<====\n");
 
     return NeedInvalidate;
@@ -2798,6 +2818,11 @@ FdoQueryPnpDeviceState(
     if (Fdo->NotDisableable) {
         Info("%s: not disableable\n", __FdoGetName(Fdo));
         State |= PNP_DEVICE_NOT_DISABLEABLE;
+    }
+
+    if (!__FdoIsActive(Fdo)) {
+        Info("%s: not active\n", __FdoGetName(Fdo));
+        State |= PNP_DEVICE_DONT_DISPLAY_IN_UI;
     }
 
     Irp->IoStatus.Information = State;

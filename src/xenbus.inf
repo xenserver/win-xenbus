@@ -96,12 +96,15 @@ StartType=%SERVICE_BOOT_START%
 ErrorControl=%SERVICE_ERROR_NORMAL% 
 ServiceBinary=%12%\xenfilt.sys 
 LoadOrderGroup="Boot Bus Extender"
-AddReg = XenFilt_Parameters
+AddReg = XenFilt_Parameters, XenFilt_Unplug
 
 [XenFilt_Parameters]
 HKR,"Parameters",,0x00000010
 HKR,"Parameters","ACPI\PNP0A03",0x00000000,"DEVICE"
 HKR,"Parameters","PCIIDE\IDEChannel",0x00000000,"DISK"
+
+[XenFilt_Unplug]
+HKR,"Unplug",,0x00000010
 
 [XenBus_Inst.CoInstallers]
 CopyFiles=CoInst_CopyFiles

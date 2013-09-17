@@ -59,20 +59,27 @@ static XENFILT_UNPLUG_CONTEXT   UnplugContext;
 
 static FORCEINLINE NTSTATUS
 __UnplugPreamble(
-    IN  PXENFILT_UNPLUG_CONTEXT Context
+    IN  PXENFILT_UNPLUG_CONTEXT Context,
+    IN  BOOLEAN                 Locked
     )
 {
-    KIRQL                       Irql;
+    KIRQL                       Irql = PASSIVE_LEVEL;
     USHORT                      Magic;
     UCHAR                       Version;
     NTSTATUS                    status;
 
-    AcquireHighLock(&Context->Lock, &Irql);
+    if (!Locked)
+        AcquireHighLock(&Context->Lock, &Irql);
 
     // See docs/misc/hvm-emulated-unplug.markdown for details of the
     // protocol in use here
 
     Magic = READ_PORT_USHORT((PUSHORT)0x10);
+    
+    if (Magic == 0xd249) {
+        Context->BlackListed = TRUE;
+        goto done;
+    }
 
     status = STATUS_NOT_SUPPORTED;
     if (Magic != 0x49d2)
@@ -91,16 +98,21 @@ __UnplugPreamble(
             Context->BlackListed = TRUE;
     }
 
-    ReleaseHighLock(&Context->Lock, Irql);
+done:
+    LogPrintf(LOG_LEVEL_WARNING,
+              "UNPLUG: PRE-AMBLE (DRIVERS %s)\n",
+              (Context->BlackListed) ? "BLACKLISTED" : "NOT BLACKLISTED");
 
-    Info("DONE %s\n", (Context->BlackListed) ? "[BLACKLISTED]" : "");
+    if (!Locked)
+        ReleaseHighLock(&Context->Lock, Irql);
 
     return STATUS_SUCCESS;
 
 fail1:
-    ReleaseHighLock(&Context->Lock, Irql);
-
     Error("fail1 (%08x)\n", status);
+
+    if (!Locked)
+        ReleaseHighLock(&Context->Lock, Irql);
 
     return status;
 }
@@ -129,10 +141,8 @@ __UnplugDisks(
     status = RegistryQuerySzValue(UnplugKey,
                                   "DISKS",
                                   &ServiceName);
-    if (!NT_SUCCESS(status)) {
-        Info("NO PV SERVICE\n");
+    if (!NT_SUCCESS(status))
         goto done;
-    }
 
     status = RtlStringCbPrintfA(ServiceKeyName,
                                 sizeof (ServiceKeyName),
@@ -144,10 +154,8 @@ __UnplugDisks(
                                 ServiceKeyName,
                                 KEY_READ,
                                 &ServiceKey);
-    if (!NT_SUCCESS(status)) {
-        Info("%Z: NO SERVICE KEY\n", ServiceName);
+    if (!NT_SUCCESS(status))
         goto done;
-    }
 
     status = RegistryQueryDwordValue(ServiceKey,
                                      "Count",
@@ -155,21 +163,20 @@ __UnplugDisks(
     if (!NT_SUCCESS(status))
         Count = 0;
 
-    if (Count == 0) {
-        Info("%Z: NO SERVICE INSTANCES\n", ServiceName);
+    if (Count == 0)
         goto done;
-    }
 
     AcquireHighLock(&Context->Lock, &Irql);
 
     ASSERT(!Context->UnpluggedDisks);
 
     WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
+
+    LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: DISKS\n");
+
     Context->UnpluggedDisks = TRUE;
 
     ReleaseHighLock(&Context->Lock, Irql);
-
-    Info("DONE\n");
 
 done:
     if (ServiceKey != NULL)
@@ -200,10 +207,8 @@ __UnplugNics(
     status = RegistryQuerySzValue(UnplugKey,
                                   "NICS",
                                   &ServiceName);
-    if (!NT_SUCCESS(status)) {
-        Info("NO PV SERVICE\n");
+    if (!NT_SUCCESS(status))
         goto done;
-    }
 
     status = RtlStringCbPrintfA(ServiceKeyName,
                                 sizeof (ServiceKeyName),
@@ -215,10 +220,8 @@ __UnplugNics(
                                 ServiceKeyName,
                                 KEY_READ,
                                 &ServiceKey);
-    if (!NT_SUCCESS(status)) {
-        Info("%Z: NO SERVICE KEY\n", ServiceName);
+    if (!NT_SUCCESS(status))
         goto done;
-    }
 
     status = RegistryQueryDwordValue(ServiceKey,
                                      "Count",
@@ -226,21 +229,20 @@ __UnplugNics(
     if (!NT_SUCCESS(status))
         Count = 0;
 
-    if (Count == 0) {
-        Info("%Z: NO SERVICE INSTANCES\n", ServiceName);
+    if (Count == 0)
         goto done;
-    }
 
     AcquireHighLock(&Context->Lock, &Irql);
 
     ASSERT(!Context->UnpluggedNics);
 
     WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
+
+    LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: NICS\n");
+
     Context->UnpluggedNics = TRUE;
 
     ReleaseHighLock(&Context->Lock, Irql);
-
-    Info("DONE\n");
 
 done:
     if (ServiceKey != NULL)
@@ -256,14 +258,22 @@ UnplugReplay(
     )
 {
     KIRQL                       Irql;
+    NTSTATUS                    status;
 
     AcquireHighLock(&Context->Lock, &Irql);
 
-    if (Context->UnpluggedDisks)
-        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
+    status = __UnplugPreamble(Context, TRUE);
+    ASSERT(NT_SUCCESS(status));
 
-    if (Context->UnpluggedNics)
+    if (Context->UnpluggedDisks) {
+        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
+        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: DISKS\n");
+    }
+
+    if (Context->UnpluggedNics) {
         WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
+        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: NICS\n");
+    }
     
     ReleaseHighLock(&Context->Lock, Irql);
 }
@@ -313,7 +323,7 @@ UnplugInitialize(
 
     InitializeHighLock(&Context->Lock);
 
-    status = __UnplugPreamble(Context);
+    status = __UnplugPreamble(Context, FALSE);
     if (!NT_SUCCESS(status))
         goto fail1;
 
@@ -359,8 +369,6 @@ UnplugTeardown(
     RtlZeroMemory(&Context->Lock, sizeof (HIGH_LOCK));
 
     ASSERT(IsZeroMemory(Context, sizeof (XENFILT_UNPLUG_CONTEXT)));
-
-    Info("DONE\n");
 
 done:
     RtlZeroMemory(Interface, sizeof (XENFILT_UNPLUG_INTERFACE));
