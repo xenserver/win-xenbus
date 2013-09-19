@@ -2717,6 +2717,9 @@ FdoQueryCapabilities(
 
     Fdo->LowerDeviceCapabilities = *Capabilities;
 
+    // Make sure that the FDO is non-removable
+    Capabilities->Removable = 0;
+
     for (SystemPowerState = 0; SystemPowerState < PowerSystemMaximum; SystemPowerState++) {
         DEVICE_POWER_STATE  DevicePowerState;
 
