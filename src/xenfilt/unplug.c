@@ -126,45 +126,53 @@ __UnplugDisks(
     )
 {
     HANDLE                      UnplugKey;
-    PANSI_STRING                ServiceName;
-    CHAR                        ServiceKeyName[sizeof (SERVICES_KEY "\\XXXXXXXX")];
+    PANSI_STRING                ServiceNames;
+    ULONG                       Index;
     HANDLE                      ServiceKey;
-    ULONG                       Count;
     KIRQL                       Irql;
     NTSTATUS                    status;
 
     UnplugKey = DriverGetUnplugKey();
 
-    ServiceName = NULL;
     ServiceKey = NULL;
+    ServiceNames = NULL;
 
     status = RegistryQuerySzValue(UnplugKey,
                                   "DISKS",
-                                  &ServiceName);
+                                  &ServiceNames);
     if (!NT_SUCCESS(status))
         goto done;
 
-    status = RtlStringCbPrintfA(ServiceKeyName,
-                                sizeof (ServiceKeyName),
-                                SERVICES_KEY "\\%Z",
-                                ServiceName);
-    ASSERT(NT_SUCCESS(status));
+    for (Index = 0; ServiceNames[Index].Buffer != NULL; Index++) {
+        PANSI_STRING    ServiceName = &ServiceNames[Index];
+        CHAR            ServiceKeyName[sizeof (SERVICES_KEY "\\XXXXXXXX")];
+        ULONG           Count;
 
-    status = RegistryOpenSubKey(NULL,
-                                ServiceKeyName,
-                                KEY_READ,
-                                &ServiceKey);
-    if (!NT_SUCCESS(status))
-        goto done;
+        status = RtlStringCbPrintfA(ServiceKeyName,
+                                    sizeof (ServiceKeyName),
+                                    SERVICES_KEY "\\%Z",
+                                    ServiceName);
+        ASSERT(NT_SUCCESS(status));
 
-    status = RegistryQueryDwordValue(ServiceKey,
-                                     "Count",
-                                     &Count);
-    if (!NT_SUCCESS(status))
-        Count = 0;
+        status = RegistryOpenSubKey(NULL,
+                                    ServiceKeyName,
+                                    KEY_READ,
+                                    &ServiceKey);
+        if (!NT_SUCCESS(status))
+            goto done;
 
-    if (Count == 0)
-        goto done;
+        status = RegistryQueryDwordValue(ServiceKey,
+                                         "Count",
+                                         &Count);
+        if (!NT_SUCCESS(status))
+            goto done;
+
+        if (Count == 0)
+            goto done;
+
+        RegistryCloseKey(ServiceKey);
+        ServiceKey = NULL;
+    }
 
     AcquireHighLock(&Context->Lock, &Irql);
 
@@ -182,8 +190,8 @@ done:
     if (ServiceKey != NULL)
         RegistryCloseKey(ServiceKey);
 
-    if (ServiceName != NULL)
-        RegistryFreeSzValue(ServiceName);
+    if (ServiceNames != NULL)
+        RegistryFreeSzValue(ServiceNames);
 }
 
 static FORCEINLINE VOID
@@ -192,49 +200,57 @@ __UnplugNics(
     )
 {
     HANDLE                      UnplugKey;
-    PANSI_STRING                ServiceName;
-    CHAR                        ServiceKeyName[sizeof (SERVICES_KEY "\\XXXXXXXX")];
+    PANSI_STRING                ServiceNames;
+    ULONG                       Index;
     HANDLE                      ServiceKey;
-    ULONG                       Count;
     KIRQL                       Irql;
     NTSTATUS                    status;
 
     UnplugKey = DriverGetUnplugKey();
 
-    ServiceName = NULL;
     ServiceKey = NULL;
+    ServiceNames = NULL;
 
     status = RegistryQuerySzValue(UnplugKey,
                                   "NICS",
-                                  &ServiceName);
+                                  &ServiceNames);
     if (!NT_SUCCESS(status))
         goto done;
 
-    status = RtlStringCbPrintfA(ServiceKeyName,
-                                sizeof (ServiceKeyName),
-                                SERVICES_KEY "\\%Z",
-                                ServiceName);
-    ASSERT(NT_SUCCESS(status));
+    for (Index = 0; ServiceNames[Index].Buffer != NULL; Index++) {
+        PANSI_STRING    ServiceName = &ServiceNames[Index];
+        CHAR            ServiceKeyName[sizeof (SERVICES_KEY "\\XXXXXXXX")];
+        ULONG           Count;
 
-    status = RegistryOpenSubKey(NULL,
-                                ServiceKeyName,
-                                KEY_READ,
-                                &ServiceKey);
-    if (!NT_SUCCESS(status))
-        goto done;
+        status = RtlStringCbPrintfA(ServiceKeyName,
+                                    sizeof (ServiceKeyName),
+                                    SERVICES_KEY "\\%Z",
+                                    ServiceName);
+        ASSERT(NT_SUCCESS(status));
 
-    status = RegistryQueryDwordValue(ServiceKey,
-                                     "Count",
-                                     &Count);
-    if (!NT_SUCCESS(status))
-        Count = 0;
+        status = RegistryOpenSubKey(NULL,
+                                    ServiceKeyName,
+                                    KEY_READ,
+                                    &ServiceKey);
+        if (!NT_SUCCESS(status))
+            goto done;
 
-    if (Count == 0)
-        goto done;
+        status = RegistryQueryDwordValue(ServiceKey,
+                                         "Count",
+                                         &Count);
+        if (!NT_SUCCESS(status))
+            goto done;
+
+        if (Count == 0)
+            goto done;
+
+        RegistryCloseKey(ServiceKey);
+        ServiceKey = NULL;
+    }
 
     AcquireHighLock(&Context->Lock, &Irql);
 
-    ASSERT(!Context->UnpluggedNics);
+    ASSERT(!Context->UnpluggedDisks);
 
     WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
 
@@ -248,8 +264,8 @@ done:
     if (ServiceKey != NULL)
         RegistryCloseKey(ServiceKey);
 
-    if (ServiceName != NULL)
-        RegistryFreeSzValue(ServiceName);
+    if (ServiceNames != NULL)
+        RegistryFreeSzValue(ServiceNames);
 }
 
 static VOID

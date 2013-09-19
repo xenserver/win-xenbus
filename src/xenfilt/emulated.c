@@ -526,8 +526,6 @@ EmulatedInitialize(
     InitializeListHead(&Context->List);
     KeInitializeSpinLock(&Context->Lock);
 
-    Info("DONE\n");
-
 done:
     Interface->Context = Context;
     Interface->Operations = &Operations;
@@ -557,8 +555,6 @@ EmulatedTeardown(
     RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
 
     ASSERT(IsZeroMemory(Context, sizeof (XENFILT_EMULATED_CONTEXT)));
-
-    Info("DONE\n");
 
 done:
     RtlZeroMemory(Interface, sizeof (XENFILT_EMULATED_INTERFACE));
