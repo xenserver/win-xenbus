@@ -1211,7 +1211,9 @@ FdoBalloon(
         if (Target > Maximum)
             Target = Maximum;
 
-        Info("Target = %llu page(s)\n", Maximum - Target);
+        Info("%s: Target = %llu page(s)\n",
+             __FdoGetName(Fdo),
+             Maximum - Target);
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -2759,15 +2761,15 @@ FdoDeviceUsageNotification(
     InPath = StackLocation->Parameters.UsageNotification.InPath;
 
     if (InPath) {
-        Info("%s: ADDING %s\n",
-             __FdoGetName(Fdo),
-             DeviceUsageTypeName(Type));
+        Trace("%s: ADDING %s\n",
+              __FdoGetName(Fdo),
+              DeviceUsageTypeName(Type));
         Fdo->Usage[Type]++;
     } else {
         if (Fdo->Usage[Type] != 0) {
-            Info("%s: REMOVING %s\n",
-                 __FdoGetName(Fdo),
-                 DeviceUsageTypeName(Type));
+            Trace("%s: REMOVING %s\n",
+                  __FdoGetName(Fdo),
+                  DeviceUsageTypeName(Type));
             --Fdo->Usage[Type];
         }
     }
