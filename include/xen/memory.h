@@ -68,6 +68,8 @@ struct xen_memory_reservation {
      *   IN:  GPFN bases of extents to populate with memory
      *   OUT: GMFN bases of extents that were allocated
      *   (NB. This command also updates the mach_to_phys translation table)
+     * XENMEM_claim_pages:
+     *   IN: must be zero
      */
     XEN_GUEST_HANDLE(xen_pfn_t) extent_start;
 
@@ -198,6 +200,17 @@ struct xen_machphys_mapping {
 typedef struct xen_machphys_mapping xen_machphys_mapping_t;
 DEFINE_XEN_GUEST_HANDLE(xen_machphys_mapping_t);
 
+/* Source mapping space. */
+/* ` enum phys_map_space { */
+#define XENMAPSPACE_shared_info  0 /* shared info page */
+#define XENMAPSPACE_grant_table  1 /* grant table page */
+#define XENMAPSPACE_gmfn         2 /* GMFN */
+#define XENMAPSPACE_gmfn_range   3 /* GMFN range, XENMEM_add_to_physmap only. */
+#define XENMAPSPACE_gmfn_foreign 4 /* GMFN from another dom,
+                                    * XENMEM_add_to_physmap_range only.
+                                    */
+/* ` } */
+
 /*
  * Sets the GPFN at which a particular page appears in the specified guest's
  * pseudophysical address space.
@@ -208,22 +221,63 @@ struct xen_add_to_physmap {
     /* Which domain to change the mapping for. */
     domid_t domid;
 
-    /* Source mapping space. */
-#define XENMAPSPACE_shared_info 0 /* shared info page */
-#define XENMAPSPACE_grant_table 1 /* grant table page */
-#define XENMAPSPACE_gmfn        2 /* GMFN */
-    unsigned int space;
+    /* Number of pages to go through for gmfn_range */
+    uint16_t    size;
+
+    unsigned int space; /* => enum phys_map_space */
 
 #define XENMAPIDX_grant_table_status 0x80000000
 
-    /* Index into source mapping space. */
+    /* Index into space being mapped. */
     xen_ulong_t idx;
 
-    /* GPFN where the source mapping page should appear. */
+    /* GPFN in domid where the source mapping page should appear. */
     xen_pfn_t     gpfn;
 };
 typedef struct xen_add_to_physmap xen_add_to_physmap_t;
 DEFINE_XEN_GUEST_HANDLE(xen_add_to_physmap_t);
+
+/* A batched version of add_to_physmap. */
+#define XENMEM_add_to_physmap_range 23
+struct xen_add_to_physmap_range {
+    /* IN */
+    /* Which domain to change the mapping for. */
+    domid_t domid;
+    uint16_t space; /* => enum phys_map_space */
+
+    /* Number of pages to go through */
+    uint16_t size;
+    domid_t foreign_domid; /* IFF gmfn_foreign */
+
+    /* Indexes into space being mapped. */
+    XEN_GUEST_HANDLE(xen_ulong_t) idxs;
+
+    /* GPFN in domid where the source mapping page should appear. */
+    XEN_GUEST_HANDLE(xen_pfn_t) gpfns;
+
+    /* OUT */
+
+    /* Per index error code. */
+    XEN_GUEST_HANDLE(int) errs;
+};
+typedef struct xen_add_to_physmap_range xen_add_to_physmap_range_t;
+DEFINE_XEN_GUEST_HANDLE(xen_add_to_physmap_range_t);
+
+/*
+ * Unmaps the page appearing at a particular GPFN from the specified guest's
+ * pseudophysical address space.
+ * arg == addr of xen_remove_from_physmap_t.
+ */
+#define XENMEM_remove_from_physmap      15
+struct xen_remove_from_physmap {
+    /* Which domain to change the mapping for. */
+    domid_t domid;
+
+    /* GPFN of the current mapping of the page. */
+    xen_pfn_t     gpfn;
+};
+typedef struct xen_remove_from_physmap xen_remove_from_physmap_t;
+DEFINE_XEN_GUEST_HANDLE(xen_remove_from_physmap_t);
 
 /*** REMOVED ***/
 /*#define XENMEM_translate_gpfn_list  8*/
@@ -285,18 +339,134 @@ struct xen_pod_target {
 };
 typedef struct xen_pod_target xen_pod_target_t;
 
+#if defined(__XEN__) || defined(__XEN_TOOLS__)
+
+#ifndef uint64_aligned_t
+#define uint64_aligned_t uint64_t
+#endif
+
 /*
  * Get the number of MFNs saved through memory sharing.
  * The call never fails. 
  */
 #define XENMEM_get_sharing_freed_pages    18
+#define XENMEM_get_sharing_shared_pages   19
+
+#define XENMEM_paging_op                    20
+#define XENMEM_paging_op_nominate           0
+#define XENMEM_paging_op_evict              1
+#define XENMEM_paging_op_prep               2
+
+#define XENMEM_access_op                    21
+#define XENMEM_access_op_resume             0
+
+struct xen_mem_event_op {
+    uint8_t     op;         /* XENMEM_*_op_* */
+    domid_t     domain;
+    
+
+    /* PAGING_PREP IN: buffer to immediately fill page in */
+    uint64_aligned_t    buffer;
+    /* Other OPs */
+    uint64_aligned_t    gfn;           /* IN:  gfn of page being operated on */
+};
+typedef struct xen_mem_event_op xen_mem_event_op_t;
+DEFINE_XEN_GUEST_HANDLE(xen_mem_event_op_t);
+
+#define XENMEM_sharing_op                   22
+#define XENMEM_sharing_op_nominate_gfn      0
+#define XENMEM_sharing_op_nominate_gref     1
+#define XENMEM_sharing_op_share             2
+#define XENMEM_sharing_op_resume            3
+#define XENMEM_sharing_op_debug_gfn         4
+#define XENMEM_sharing_op_debug_mfn         5
+#define XENMEM_sharing_op_debug_gref        6
+#define XENMEM_sharing_op_add_physmap       7
+#define XENMEM_sharing_op_audit             8
+
+#define XENMEM_SHARING_OP_S_HANDLE_INVALID  (-10)
+#define XENMEM_SHARING_OP_C_HANDLE_INVALID  (-9)
+
+/* The following allows sharing of grant refs. This is useful
+ * for sharing utilities sitting as "filters" in IO backends
+ * (e.g. memshr + blktap(2)). The IO backend is only exposed 
+ * to grant references, and this allows sharing of the grefs */
+#define XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG   (1ULL << 62)
+
+#define XENMEM_SHARING_OP_FIELD_MAKE_GREF(field, val)  \
+    (field) = (XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG | val)
+#define XENMEM_SHARING_OP_FIELD_IS_GREF(field)         \
+    ((field) & XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG)
+#define XENMEM_SHARING_OP_FIELD_GET_GREF(field)        \
+    ((field) & (~XENMEM_SHARING_OP_FIELD_IS_GREF_FLAG))
+
+struct xen_mem_sharing_op {
+    uint8_t     op;     /* XENMEM_sharing_op_* */
+    domid_t     domain;
+
+    union {
+        struct mem_sharing_op_nominate {  /* OP_NOMINATE_xxx           */
+            union {
+                uint64_aligned_t gfn;     /* IN: gfn to nominate       */
+                uint32_t      grant_ref;  /* IN: grant ref to nominate */
+            } u;
+            uint64_aligned_t  handle;     /* OUT: the handle           */
+        } nominate;
+        struct mem_sharing_op_share {     /* OP_SHARE/ADD_PHYSMAP */
+            uint64_aligned_t source_gfn;    /* IN: the gfn of the source page */
+            uint64_aligned_t source_handle; /* IN: handle to the source page */
+            uint64_aligned_t client_gfn;    /* IN: the client gfn */
+            uint64_aligned_t client_handle; /* IN: handle to the client page */
+            domid_t  client_domain; /* IN: the client domain id */
+        } share; 
+        struct mem_sharing_op_debug {     /* OP_DEBUG_xxx */
+            union {
+                uint64_aligned_t gfn;      /* IN: gfn to debug          */
+                uint64_aligned_t mfn;      /* IN: mfn to debug          */
+                uint32_t gref;     /* IN: gref to debug         */
+            } u;
+        } debug;
+    } u;
+};
+typedef struct xen_mem_sharing_op xen_mem_sharing_op_t;
+DEFINE_XEN_GUEST_HANDLE(xen_mem_sharing_op_t);
+
+/*
+ * Attempt to stake a claim for a domain on a quantity of pages
+ * of system RAM, but _not_ assign specific pageframes.  Only
+ * arithmetic is performed so the hypercall is very fast and need
+ * not be preemptible, thus sidestepping time-of-check-time-of-use
+ * races for memory allocation.  Returns 0 if the hypervisor page
+ * allocator has atomically and successfully claimed the requested
+ * number of pages, else non-zero.
+ *
+ * Any domain may have only one active claim.  When sufficient memory
+ * has been allocated to resolve the claim, the claim silently expires.
+ * Claiming zero pages effectively resets any outstanding claim and
+ * is always successful.
+ *
+ * Note that a valid claim may be staked even after memory has been
+ * allocated for a domain.  In this case, the claim is not incremental,
+ * i.e. if the domain's tot_pages is 3, and a claim is staked for 10,
+ * only 7 additional pages are claimed.
+ *
+ * Caller must be privileged or the hypercall fails.
+ */
+#define XENMEM_claim_pages                  24
+
+/*
+ * XENMEM_claim_pages flags - the are no flags at this time.
+ * The zero value is appropiate.
+ */
+
+#endif /* defined(__XEN__) || defined(__XEN_TOOLS__) */
 
 #endif /* __XEN_PUBLIC_MEMORY_H__ */
 
 /*
  * Local variables:
  * mode: C
- * c-set-style: "BSD"
+ * c-file-style: "BSD"
  * c-basic-offset: 4
  * tab-width: 4
  * indent-tabs-mode: nil

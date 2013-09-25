@@ -393,19 +393,17 @@ __SharedInfoMap(
     NTSTATUS                        status;
 
     // This, unfortunately, seems to be a necessary hack to
-    // get the domain wallclock updated correctly.
-    // The HVM parameter in question is defined in Xen kernel
-    // patch 32-on-64-geneva-drivers.patch.
+    // get the domain wallclock updated correctly on older
+    // versions of XenServer.
 #define HVM_PARAM_32BIT 8
 
 #if defined(__i386__)
-    status = HvmSetParam(HVM_PARAM_32BIT, 1);
+    (VOID) HvmSetParam(HVM_PARAM_32BIT, 1);
 #elif defined(__x86_64__)
-    status = HvmSetParam(HVM_PARAM_32BIT, 0);
+    (VOID) HvmSetParam(HVM_PARAM_32BIT, 0);
 #else
 #error 'Unrecognised architecture'
 #endif
-    ASSERT(NT_SUCCESS(status));
 
 #undef  HVM_PARAM_32BIT
 

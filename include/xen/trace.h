@@ -38,7 +38,7 @@
 #define TRC_MEM      0x0010f000    /* Xen memory trace         */
 #define TRC_PV       0x0020f000    /* Xen PV traces            */
 #define TRC_SHADOW   0x0040f000    /* Xen shadow tracing       */
-#define TRC_PM       0x0080f000    /* Xen power management trace */
+#define TRC_HW       0x0080f000    /* Xen hardware-related traces */
 #define TRC_GUEST    0x0800f000    /* Guest-generated traces   */
 #define TRC_ALL      0x0ffff000
 #define TRC_HD_TO_EVENT(x) ((x)&0x0fffffff)
@@ -57,11 +57,40 @@
 #define TRC_SCHED_CLASS     0x00022000   /* Scheduler-specific    */
 #define TRC_SCHED_VERBOSE   0x00028000   /* More inclusive scheduling */
 
+/*
+ * The highest 3 bits of the last 12 bits of TRC_SCHED_CLASS above are
+ * reserved for encoding what scheduler produced the information. The
+ * actual event is encoded in the last 9 bits.
+ *
+ * This means we have 8 scheduling IDs available (which means at most 8
+ * schedulers generating events) and, in each scheduler, up to 512
+ * different events.
+ */
+#define TRC_SCHED_ID_BITS 3
+#define TRC_SCHED_ID_SHIFT (TRC_SUBCLS_SHIFT - TRC_SCHED_ID_BITS)
+#define TRC_SCHED_ID_MASK (((1UL<<TRC_SCHED_ID_BITS) - 1) << TRC_SCHED_ID_SHIFT)
+#define TRC_SCHED_EVT_MASK (~(TRC_SCHED_ID_MASK))
+
+/* Per-scheduler IDs, to identify scheduler specific events */
+#define TRC_SCHED_CSCHED   0
+#define TRC_SCHED_CSCHED2  1
+#define TRC_SCHED_SEDF     2
+#define TRC_SCHED_ARINC653 3
+
+/* Per-scheduler tracing */
+#define TRC_SCHED_CLASS_EVT(_c, _e) \
+  ( ( TRC_SCHED_CLASS | \
+      ((TRC_SCHED_##_c << TRC_SCHED_ID_SHIFT) & TRC_SCHED_ID_MASK) ) + \
+    (_e & TRC_SCHED_EVT_MASK) )
+
+/* Trace classes for Hardware */
+#define TRC_HW_PM           0x00801000   /* Power management traces */
+#define TRC_HW_IRQ          0x00802000   /* Traces relating to the handling of IRQs */
+
 /* Trace events per class */
 #define TRC_LOST_RECORDS        (TRC_GEN + 1)
 #define TRC_TRACE_WRAP_BUFFER  (TRC_GEN + 2)
 #define TRC_TRACE_CPU_CHANGE    (TRC_GEN + 3)
-#define TRC_TRACE_IRQ           (TRC_GEN + 4)
 
 #define TRC_SCHED_RUNSTATE_CHANGE   (TRC_SCHED_MIN + 1)
 #define TRC_SCHED_CONTINUE_RUNNING  (TRC_SCHED_MIN + 2)
@@ -91,20 +120,51 @@
 #define TRC_MEM_POD_ZERO_RECLAIM    (TRC_MEM + 17)
 #define TRC_MEM_POD_SUPERPAGE_SPLINTER (TRC_MEM + 18)
 
+#define TRC_PV_ENTRY   0x00201000 /* Hypervisor entry points for PV guests. */
+#define TRC_PV_SUBCALL 0x00202000 /* Sub-call in a multicall hypercall */
 
-#define TRC_PV_HYPERCALL             (TRC_PV +  1)
-#define TRC_PV_TRAP                  (TRC_PV +  3)
-#define TRC_PV_PAGE_FAULT            (TRC_PV +  4)
-#define TRC_PV_FORCED_INVALID_OP     (TRC_PV +  5)
-#define TRC_PV_EMULATE_PRIVOP        (TRC_PV +  6)
-#define TRC_PV_EMULATE_4GB           (TRC_PV +  7)
-#define TRC_PV_MATH_STATE_RESTORE    (TRC_PV +  8)
-#define TRC_PV_PAGING_FIXUP          (TRC_PV +  9)
-#define TRC_PV_GDT_LDT_MAPPING_FAULT (TRC_PV + 10)
-#define TRC_PV_PTWR_EMULATION        (TRC_PV + 11)
-#define TRC_PV_PTWR_EMULATION_PAE    (TRC_PV + 12)
-  /* Indicates that addresses in trace record are 64 bits */
-#define TRC_64_FLAG               (0x100) 
+#define TRC_PV_HYPERCALL             (TRC_PV_ENTRY +  1)
+#define TRC_PV_TRAP                  (TRC_PV_ENTRY +  3)
+#define TRC_PV_PAGE_FAULT            (TRC_PV_ENTRY +  4)
+#define TRC_PV_FORCED_INVALID_OP     (TRC_PV_ENTRY +  5)
+#define TRC_PV_EMULATE_PRIVOP        (TRC_PV_ENTRY +  6)
+#define TRC_PV_EMULATE_4GB           (TRC_PV_ENTRY +  7)
+#define TRC_PV_MATH_STATE_RESTORE    (TRC_PV_ENTRY +  8)
+#define TRC_PV_PAGING_FIXUP          (TRC_PV_ENTRY +  9)
+#define TRC_PV_GDT_LDT_MAPPING_FAULT (TRC_PV_ENTRY + 10)
+#define TRC_PV_PTWR_EMULATION        (TRC_PV_ENTRY + 11)
+#define TRC_PV_PTWR_EMULATION_PAE    (TRC_PV_ENTRY + 12)
+#define TRC_PV_HYPERCALL_V2          (TRC_PV_ENTRY + 13)
+#define TRC_PV_HYPERCALL_SUBCALL     (TRC_PV_SUBCALL + 14)
+
+/*
+ * TRC_PV_HYPERCALL_V2 format
+ *
+ * Only some of the hypercall argument are recorded. Bit fields A0 to
+ * A5 in the first extra word are set if the argument is present and
+ * the arguments themselves are packed sequentially in the following
+ * words.
+ *
+ * The TRC_64_FLAG bit is not set for these events (even if there are
+ * 64-bit arguments in the record).
+ *
+ * Word
+ * 0    bit 31 30|29 28|27 26|25 24|23 22|21 20|19 ... 0
+ *          A5   |A4   |A3   |A2   |A1   |A0   |Hypercall op
+ * 1    First 32 bit (or low word of first 64 bit) arg in record
+ * 2    Second 32 bit (or high word of first 64 bit) arg in record
+ * ...
+ *
+ * A0-A5 bitfield values:
+ *
+ *   00b  Argument not present
+ *   01b  32-bit argument present
+ *   10b  64-bit argument present
+ *   11b  Reserved
+ */
+#define TRC_PV_HYPERCALL_V2_ARG_32(i) (0x1 << (20 + 2*(i)))
+#define TRC_PV_HYPERCALL_V2_ARG_64(i) (0x2 << (20 + 2*(i)))
+#define TRC_PV_HYPERCALL_V2_ARG_MASK  (0xfff00000)
 
 #define TRC_SHADOW_NOT_SHADOW                 (TRC_SHADOW +  1)
 #define TRC_SHADOW_FAST_PROPAGATE             (TRC_SHADOW +  2)
@@ -123,6 +183,7 @@
 #define TRC_SHADOW_RESYNC_ONLY                (TRC_SHADOW + 15)
 
 /* trace events per subclass */
+#define TRC_HVM_NESTEDFLAG      (0x400)
 #define TRC_HVM_VMENTRY         (TRC_HVM_ENTRYEXIT + 0x01)
 #define TRC_HVM_VMEXIT          (TRC_HVM_ENTRYEXIT + 0x02)
 #define TRC_HVM_VMEXIT64        (TRC_HVM_ENTRYEXIT + TRC_64_FLAG + 0x02)
@@ -160,18 +221,37 @@
 #define TRC_HVM_RDTSC           (TRC_HVM_HANDLER + 0x1a)
 #define TRC_HVM_INTR_WINDOW     (TRC_HVM_HANDLER + 0x20)
 #define TRC_HVM_NPF             (TRC_HVM_HANDLER + 0x21)
+#define TRC_HVM_REALMODE_EMULATE (TRC_HVM_HANDLER + 0x22)
+#define TRC_HVM_TRAP             (TRC_HVM_HANDLER + 0x23)
+#define TRC_HVM_TRAP_DEBUG       (TRC_HVM_HANDLER + 0x24)
+#define TRC_HVM_VLAPIC           (TRC_HVM_HANDLER + 0x25)
 
 #define TRC_HVM_IOPORT_WRITE    (TRC_HVM_HANDLER + 0x216)
 #define TRC_HVM_IOMEM_WRITE     (TRC_HVM_HANDLER + 0x217)
 
-/* trace subclasses for power management */
-#define TRC_PM_FREQ     0x00801000      /* xen cpu freq events */
-#define TRC_PM_IDLE     0x00802000      /* xen cpu idle events */
-
 /* trace events for per class */
-#define TRC_PM_FREQ_CHANGE      (TRC_PM_FREQ + 0x01)
-#define TRC_PM_IDLE_ENTRY       (TRC_PM_IDLE + 0x01)
-#define TRC_PM_IDLE_EXIT        (TRC_PM_IDLE + 0x02)
+#define TRC_PM_FREQ_CHANGE      (TRC_HW_PM + 0x01)
+#define TRC_PM_IDLE_ENTRY       (TRC_HW_PM + 0x02)
+#define TRC_PM_IDLE_EXIT        (TRC_HW_PM + 0x03)
+
+/* Trace events for IRQs */
+#define TRC_HW_IRQ_MOVE_CLEANUP_DELAY (TRC_HW_IRQ + 0x1)
+#define TRC_HW_IRQ_MOVE_CLEANUP       (TRC_HW_IRQ + 0x2)
+#define TRC_HW_IRQ_BIND_VECTOR        (TRC_HW_IRQ + 0x3)
+#define TRC_HW_IRQ_CLEAR_VECTOR       (TRC_HW_IRQ + 0x4)
+#define TRC_HW_IRQ_MOVE_FINISH        (TRC_HW_IRQ + 0x5)
+#define TRC_HW_IRQ_ASSIGN_VECTOR      (TRC_HW_IRQ + 0x6)
+#define TRC_HW_IRQ_UNMAPPED_VECTOR    (TRC_HW_IRQ + 0x7)
+#define TRC_HW_IRQ_HANDLED            (TRC_HW_IRQ + 0x8)
+
+/*
+ * Event Flags
+ *
+ * Some events (e.g, TRC_PV_TRAP and TRC_HVM_IOMEM_READ) have multiple
+ * record formats.  These event flags distinguish between the
+ * different formats.
+ */
+#define TRC_64_FLAG 0x100 /* Addresses are 64 bits (instead of 32 bits) */
 
 /* This structure represents a single trace buffer record. */
 struct t_rec {
@@ -222,7 +302,7 @@ struct t_info {
 /*
  * Local variables:
  * mode: C
- * c-set-style: "BSD"
+ * c-file-style: "BSD"
  * c-basic-offset: 4
  * tab-width: 4
  * indent-tabs-mode: nil

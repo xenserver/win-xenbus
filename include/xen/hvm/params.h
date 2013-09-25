@@ -52,14 +52,9 @@
 #define HVM_PARAM_IOREQ_PFN    5
 
 #define HVM_PARAM_BUFIOREQ_PFN 6
+#define HVM_PARAM_BUFIOREQ_EVTCHN 26
 
-#ifdef __ia64__
-
-#define HVM_PARAM_NVRAM_FD     7
-#define HVM_PARAM_VHPT_SIZE    8
-#define HVM_PARAM_BUFPIOREQ_PFN	9
-
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 
 /* Expose Viridian interfaces to this HVM guest? */
 #define HVM_PARAM_VIRIDIAN     9
@@ -131,6 +126,7 @@
 #define HVM_PARAM_MEMORY_EVENT_CR4          22
 #define HVM_PARAM_MEMORY_EVENT_INT3         23
 #define HVM_PARAM_MEMORY_EVENT_SINGLE_STEP  25
+#define HVM_PARAM_MEMORY_EVENT_MSR          30
 
 #define HVMPME_MODE_MASK       (3 << 0)
 #define HVMPME_mode_disabled   0
@@ -138,6 +134,17 @@
 #define HVMPME_mode_sync       2
 #define HVMPME_onchangeonly    (1 << 2)
 
-#define HVM_NR_PARAMS          26
+/* Boolean: Enable nestedhvm (hvm only) */
+#define HVM_PARAM_NESTEDHVM    24
+
+/* Params for the mem event rings */
+#define HVM_PARAM_PAGING_RING_PFN   27
+#define HVM_PARAM_ACCESS_RING_PFN   28
+#define HVM_PARAM_SHARING_RING_PFN  29
+
+/* SHUTDOWN_* action in case of a triple fault */
+#define HVM_PARAM_TRIPLE_FAULT_REASON 31
+
+#define HVM_NR_PARAMS          32
 
 #endif /* __XEN_PUBLIC_HVM_PARAMS_H__ */

@@ -48,7 +48,8 @@ enum xsd_sockmsg_type
     XS_IS_DOMAIN_INTRODUCED,
     XS_RESUME,
     XS_SET_TARGET,
-    XS_RESTRICT
+    XS_RESTRICT,
+    XS_RESET_WATCHES
 };
 
 #define XS_WRITE_NONE "NONE"
@@ -102,7 +103,10 @@ enum xs_watch_type
     XS_WATCH_TOKEN
 };
 
-/* Inter-domain shared memory communications. */
+/*
+ * `incontents 150 xenstore_struct XenStore wire protocol.
+ *
+ * Inter-domain shared memory communications. */
 #define XENSTORE_RING_SIZE 1024
 typedef uint32_t XENSTORE_RING_IDX;
 #define MASK_XENSTORE_IDX(idx) ((idx) & (XENSTORE_RING_SIZE-1))
@@ -125,7 +129,7 @@ struct xenstore_domain_interface {
 /*
  * Local variables:
  * mode: C
- * c-set-style: "BSD"
+ * c-file-style: "BSD"
  * c-basic-offset: 4
  * tab-width: 4
  * indent-tabs-mode: nil
