@@ -250,7 +250,7 @@ __UnplugNics(
 
     AcquireHighLock(&Context->Lock, &Irql);
 
-    ASSERT(!Context->UnpluggedDisks);
+    ASSERT(!Context->UnpluggedNics);
 
     WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
 
