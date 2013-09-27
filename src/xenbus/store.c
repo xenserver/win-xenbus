@@ -422,6 +422,29 @@ __StoreReceiveSegment(
 }
 
 static FORCEINLINE BOOLEAN
+__StoreIgnoreHeaderType(
+    IN  ULONG   Type
+    )
+{
+    switch (Type) {
+    case XS_DEBUG:
+    case XS_GET_PERMS:
+    case XS_INTRODUCE:
+    case XS_RELEASE:
+    case XS_GET_DOMAIN_PATH:
+    case XS_MKDIR:
+    case XS_SET_PERMS:
+    case XS_IS_DOMAIN_INTRODUCED:
+    case XS_RESUME:
+    case XS_SET_TARGET:
+    case XS_RESTRICT:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static FORCEINLINE BOOLEAN
 __StoreVerifyHeader(
     struct xsd_sockmsg  *Header
     )
@@ -439,7 +462,8 @@ __StoreVerifyHeader(
         Header->type != XS_WRITE &&
         Header->type != XS_RM &&
         Header->type != XS_WATCH_EVENT &&
-        Header->type != XS_ERROR) {
+        Header->type != XS_ERROR &&
+        !__StoreIgnoreHeaderType(Header->type)) {
         Error("UNRECOGNIZED TYPE 0x%08x\n", Header->type);
         Valid = FALSE;
     }
@@ -735,6 +759,12 @@ __StoreProcessResponse(
     PSTORE_REQUEST              Request;
 
     Response = &Context->Response;
+
+    if (__StoreIgnoreHeaderType(Response->Header.type)) {
+        Warning("IGNORING RESPONSE TYPE %08X\n", Response->Header.type);
+        __StoreResetResponse(Context);
+        return;
+    }
 
     if (Response->Header.type == XS_WATCH_EVENT) {
         __StoreProcessWatchEvent(Context);
