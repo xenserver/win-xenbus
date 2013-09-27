@@ -774,6 +774,7 @@ __StoreProcessResponse(
     Request = __StoreFindRequest(Context, Response->Header.req_id);
     if (Request == NULL) {
         Warning("SPURIOUS RESPONSE ID %08X\n", Response->Header.req_id);
+        __StoreResetResponse(Context);
         return;
     }
 
