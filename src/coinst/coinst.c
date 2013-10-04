@@ -714,14 +714,14 @@ fail1:
 }
 
 static BOOLEAN
-GetActiveDeviceInstance(
-    OUT PTCHAR  *DeviceInstance
+GetActiveDevice(
+    OUT PTCHAR  *Device
     )
 {
     HKEY        ParametersKey;
     DWORD       MaxValueLength;
-    DWORD       ActiveDeviceInstanceLength;
-    PTCHAR      ActiveDeviceInstance;
+    DWORD       ActiveDeviceLength;
+    PTCHAR      ActiveDevice;
     DWORD       Type;
     HRESULT     Error;
 
@@ -756,31 +756,31 @@ GetActiveDeviceInstance(
         goto fail2;
     }
        
-    ActiveDeviceInstanceLength = MaxValueLength + sizeof (TCHAR);
+    ActiveDeviceLength = MaxValueLength + sizeof (TCHAR);
 
-    ActiveDeviceInstance = calloc(1, ActiveDeviceInstanceLength);
-    if (ActiveDeviceInstance == NULL)
+    ActiveDevice = calloc(1, ActiveDeviceLength);
+    if (ActiveDevice == NULL)
         goto fail3;
 
     Error = RegQueryValueEx(ParametersKey,
-                            "ActiveDeviceInstance",
+                            "ActiveDevice",
                             NULL,
                             &Type,
-                            (LPBYTE)ActiveDeviceInstance,
-                            &ActiveDeviceInstanceLength);
+                            (LPBYTE)ActiveDevice,
+                            &ActiveDeviceLength);
     if (Error == ERROR_SUCCESS &&
         Type == REG_SZ)
         goto found;
 
-    free(ActiveDeviceInstance);
-    ActiveDeviceInstance = NULL;
+    free(ActiveDevice);
+    ActiveDevice = NULL;
 
 found:
-    Log("%s", (ActiveDeviceInstance != NULL) ? ActiveDeviceInstance : "none found");
+    Log("%s", (ActiveDevice != NULL) ? ActiveDevice : "none found");
 
     RegCloseKey(ParametersKey);
 
-    *DeviceInstance = ActiveDeviceInstance;
+    *Device = ActiveDevice;
     return TRUE;
 
 fail3:
@@ -806,11 +806,12 @@ fail1:
 }
 
 static BOOLEAN
-SetActiveDeviceInstance(
+SetActiveDevice(
     IN PTCHAR   DeviceInstance
     )
 {
     PTCHAR      DeviceName;
+    PTCHAR      Instance;
     BOOLEAN     Success;
     HKEY        ParametersKey;
     HRESULT     Error;
@@ -851,8 +852,12 @@ SetActiveDeviceInstance(
         goto fail2;
     }
 
+    Instance = strrchr(DeviceInstance, '\\');
+    assert(Instance != NULL);
+    *Instance = '\0';
+
     Error = RegSetValueEx(ParametersKey,
-                          "ActiveDeviceInstance",
+                          "ActiveDevice",
                           0,
                           REG_SZ,
                           (LPBYTE)DeviceInstance,
@@ -890,7 +895,7 @@ fail1:
 }
 
 static BOOLEAN
-ClearActiveDeviceInstance(
+ClearActiveDevice(
     VOID
     )
 {
@@ -908,7 +913,7 @@ ClearActiveDeviceInstance(
     }
 
     Error = RegDeleteValue(ParametersKey,
-                           "ActiveDeviceInstance");
+                           "ActiveDevice");
     if (Error != ERROR_SUCCESS) {
         SetLastError(Error);
         goto fail2;
@@ -1611,7 +1616,7 @@ __DifInstallPreProcess(
 {
     BOOLEAN                         Success;
     PTCHAR                          DeviceInstance;
-    PTCHAR                          ActiveDeviceInstance;
+    PTCHAR                          ActiveDevice;
     HRESULT                         Error;
 
     UNREFERENCED_PARAMETER(Context);
@@ -1626,18 +1631,18 @@ __DifInstallPreProcess(
     if (DeviceInstance == NULL)
         goto fail2;
 
-    ActiveDeviceInstance = NULL;
+    ActiveDevice = NULL;
 
-    Success = GetActiveDeviceInstance(&ActiveDeviceInstance);
+    Success = GetActiveDevice(&ActiveDevice);
     if (!Success)
         goto fail3;
 
-    if (ActiveDeviceInstance == NULL) {
-        Success = SetActiveDeviceInstance(DeviceInstance);
+    if (ActiveDevice == NULL) {
+        Success = SetActiveDevice(DeviceInstance);
         if (!Success)
             goto fail4;
     } else {
-        free(ActiveDeviceInstance);
+        free(ActiveDevice);
     }
 
     free(DeviceInstance);
@@ -1649,7 +1654,7 @@ __DifInstallPreProcess(
 fail4:
     Log("fail4");
 
-    free(ActiveDeviceInstance);
+    free(ActiveDevice);
 
 fail3:
     Log("fail3");
@@ -1682,7 +1687,6 @@ __DifInstallPostProcess(
 {
     HRESULT                         Error;
     PTCHAR                          DeviceInstance;
-    PTCHAR                          ActiveDeviceInstance;
     DWORD                           DeviceId;
     DWORD                           Count;
     BOOLEAN                         Success;
@@ -1699,34 +1703,25 @@ __DifInstallPostProcess(
     if (DeviceInstance == NULL)
         goto fail2;
 
-    ActiveDeviceInstance = NULL;
-
-    Success = GetActiveDeviceInstance(&ActiveDeviceInstance);
-    if (!Success)
-        goto fail3;
-
     if (sscanf_s(DeviceInstance,
                  "PCI\\VEN_5853&DEV_%x",
                  &DeviceId) != 1) {
         SetLastError(ERROR_BAD_FORMAT);
-        goto fail4;
+        goto fail3;
     }
 
     Success = SetFriendlyName(DeviceInfoSet, DeviceInfoData, DeviceId);
     if (!Success)
-        goto fail5;
+        goto fail4;
 
     Success = IncrementServiceCount(&Count);
     if (!Success)
-        goto fail6;
+        goto fail5;
 
     if (Count == 1) {
         (VOID) InstallFilter(&GUID_DEVCLASS_SYSTEM, "XENFILT");
         (VOID) InstallFilter(&GUID_DEVCLASS_HDC, "XENFILT");
     }
-
-    if (ActiveDeviceInstance != NULL)
-        free(ActiveDeviceInstance);
 
     free(DeviceInstance);
 
@@ -1734,17 +1729,11 @@ __DifInstallPostProcess(
 
     return NO_ERROR;
 
-fail6:
-    Log("fail6");
-
 fail5:
     Log("fail5");
 
 fail4:
     Log("fail4");
-
-    if (ActiveDeviceInstance != NULL)
-        free(ActiveDeviceInstance);
 
 fail3:
     Log("fail3");
@@ -1827,7 +1816,7 @@ __DifRemovePreProcess(
 {
     BOOLEAN                         Success;
     PTCHAR                          DeviceInstance;
-    PTCHAR                          ActiveDeviceInstance;
+    PTCHAR                          ActiveDevice;
     BOOLEAN                         Active;
     HRESULT                         Error;
 
@@ -1839,20 +1828,22 @@ __DifRemovePreProcess(
     if (DeviceInstance == NULL)
         goto fail1;
 
-    Success = GetActiveDeviceInstance(&ActiveDeviceInstance);
+    Success = GetActiveDevice(&ActiveDevice);
     if (!Success)
         goto fail2;
 
-    Active = (ActiveDeviceInstance != NULL &&
-              strcmp(DeviceInstance, ActiveDeviceInstance) == 0) ?
+    Active = (ActiveDevice != NULL &&
+              strncmp(ActiveDevice,
+                      DeviceInstance,
+                      strlen(ActiveDevice)) == 0) ?
              TRUE :
              FALSE;
 
     if (Active)
-        ClearActiveDeviceInstance();
+        ClearActiveDevice();
 
-    if (ActiveDeviceInstance != NULL)
-        free(ActiveDeviceInstance);
+    if (ActiveDevice != NULL)
+        free(ActiveDevice);
 
     free(DeviceInstance);
 

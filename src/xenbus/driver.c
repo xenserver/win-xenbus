@@ -237,10 +237,9 @@ AddDevice(
     )
 {
     HANDLE              ParametersKey;
-    PANSI_STRING        ActiveDeviceInstance;
+    PANSI_STRING        ActiveDevice;
     BOOLEAN             Active;
     PWCHAR              DeviceID;
-    PWCHAR              InstanceID;
     UNICODE_STRING      Unicode;
     ULONG               Length;
     NTSTATUS            status;
@@ -251,35 +250,30 @@ AddDevice(
 
     if (ParametersKey != NULL) {
         status = RegistryQuerySzValue(ParametersKey,
-                                      "ActiveDeviceInstance",
-                                      &ActiveDeviceInstance);
+                                      "ActiveDevice",
+                                      &ActiveDevice);
         if (!NT_SUCCESS(status))
-            ActiveDeviceInstance = NULL;
+            ActiveDevice = NULL;
     } else {
-        ActiveDeviceInstance = NULL;
+        ActiveDevice = NULL;
     }
 
     Active = FALSE;
 
     DeviceID = NULL;
-    InstanceID = NULL;
 
     RtlZeroMemory(&Unicode, sizeof (UNICODE_STRING));
 
-    if (ActiveDeviceInstance == NULL)
+    if (ActiveDevice == NULL)
         goto done;
 
     status = __DriverQueryId(DeviceObject, BusQueryDeviceID, &DeviceID);
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    status = __DriverQueryId(DeviceObject, BusQueryInstanceID, &InstanceID);
+    status = RtlAnsiStringToUnicodeString(&Unicode, ActiveDevice, TRUE);
     if (!NT_SUCCESS(status))
         goto fail2;
-
-    status = RtlAnsiStringToUnicodeString(&Unicode, ActiveDeviceInstance, TRUE);
-    if (!NT_SUCCESS(status))
-        goto fail3;
 
     Length = (ULONG)wcslen(DeviceID);
     if (_wcsnicmp(Unicode.Buffer,
@@ -287,25 +281,23 @@ AddDevice(
                   Length) != 0)
         goto done;
 
-    Length = (ULONG)wcslen(InstanceID);
-    if (_wcsnicmp(Unicode.Buffer + (Unicode.Length / sizeof (WCHAR)) - Length,
-                  InstanceID,
-                  Length) != 0)
-        goto done;
-
     Active = TRUE;
 
-    RegistryFreeSzValue(ActiveDeviceInstance);
-
 done:
-    if (Unicode.Buffer != NULL)
+    if (ActiveDevice != NULL) {
+        RegistryFreeSzValue(ActiveDevice);
+        ActiveDevice = NULL;
+    }
+
+    if (Unicode.Buffer != NULL) {
         RtlFreeUnicodeString(&Unicode);
+        Unicode.Buffer = NULL;
+    }
 
-    if (InstanceID != NULL)
-        ExFreePool(InstanceID);
-
-    if (DeviceID != NULL)
+    if (DeviceID != NULL) {
         ExFreePool(DeviceID);
+        DeviceID = NULL;
+    }
 
     status = FdoCreate(DeviceObject, Active);
     if (!NT_SUCCESS(status))
@@ -316,9 +308,6 @@ done:
 fail3:
     Error("fail3\n");
 
-    if (InstanceID != NULL)
-        ExFreePool(InstanceID);
-
 fail2:
     Error("fail2\n");
 
@@ -326,7 +315,8 @@ fail2:
         ExFreePool(DeviceID);
 
 fail1:
-    RegistryFreeSzValue(ActiveDeviceInstance);
+    if (ActiveDevice != NULL)
+        RegistryFreeSzValue(ActiveDevice);
 
     Error("fail1 (%08x)\n", status);
 
