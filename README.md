@@ -1,11 +1,11 @@
 XenBus - The XenServer Paravitual Bus Device Driver for Windows
 ===============================================================
 
-XenBus consists of three device drivers:
+The XenBus package consists of three device drivers:
 
 *    xenbus.sys is a bus driver which attaches to a virtual device on the PCI
-     bus and provides child devices for the other XenServer device drivers to
-     attach to.
+     bus and provides child devices for the other XenServer paravirtual
+     device drivers to attach to.
 
 *    xen.sys is a support library which provides interfaces for communicating
      with the Xen hypervisor
