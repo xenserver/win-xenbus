@@ -1623,7 +1623,6 @@ __FdoD3ToD0(
     Trace("====>\n");
 
     ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
-    ASSERT3U(__FdoGetDevicePowerState(Fdo), ==, PowerDeviceD3);
 
     EVTCHN(Acquire, &Fdo->EvtchnInterface);
 
