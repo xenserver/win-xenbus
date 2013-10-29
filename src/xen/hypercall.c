@@ -31,6 +31,7 @@
 
 #include <ntddk.h>
 #include <xen.h>
+#include <util.h>
 
 #include "hypercall.h"
 #include "dbg_print.h"
@@ -54,32 +55,6 @@ typedef UCHAR           HYPERCALL_GATE[32];
 typedef HYPERCALL_GATE  *PHYPERCALL_GATE;
 
 PHYPERCALL_GATE     Hypercall;
-
-static FORCEINLINE VOID
-__CpuId(
-    IN  ULONG   Leaf,
-    OUT PULONG  EAX OPTIONAL,
-    OUT PULONG  EBX OPTIONAL,
-    OUT PULONG  ECX OPTIONAL,
-    OUT PULONG  EDX OPTIONAL
-    )
-{
-    ULONG       Value[4] = {0};
-
-    __cpuid(Value, Leaf);
-
-    if (EAX)
-        *EAX = Value[0];
-
-    if (EBX)
-        *EBX = Value[1];
-
-    if (ECX)
-        *ECX = Value[2];
-
-    if (EDX)
-        *EDX = Value[3];
-}
 
 NTSTATUS
 HypercallInitialize(

@@ -40,6 +40,13 @@
 #include "dbg_print.h"
 #include "assert.h"
 
+typedef struct _SYSTEM_CPU {
+    CHAR    Manufacturer[13];
+    UCHAR   ApicID;
+} SYSTEM_CPU, *PSYSTEM_CPU;
+
+static SYSTEM_CPU   SystemCpu[MAXIMUM_PROCESSORS];
+
 static FORCEINLINE const CHAR *
 __PlatformIdName(
     IN  ULONG   PlatformId
@@ -192,6 +199,97 @@ __SystemGetMemoryInformation(
     }
 }
 
+KDEFERRED_ROUTINE   SystemCpuInformation;
+
+VOID
+SystemCpuInformation(
+    IN  PKDPC   Dpc,
+    IN  PVOID   Context,
+    IN  PVOID   Argument1,
+    IN  PVOID   Argument2
+    )
+{
+    PKSPIN_LOCK     Lock = Argument1;
+    PKEVENT         Event = Argument2;
+    ULONG           Index;
+    PSYSTEM_CPU     Cpu;
+    ULONG           EBX;
+    ULONG           ECX;
+    ULONG           EDX;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Argument2);
+
+    ASSERT(Lock != NULL);
+    ASSERT(Event != NULL);
+
+    KeAcquireSpinLockAtDpcLevel(Lock);
+
+    Index = KeGetCurrentProcessorNumber();
+
+    Info("====> (%u)\n", Index);
+
+    Cpu = &SystemCpu[Index];
+
+    __CpuId(0, NULL, &EBX, &ECX, &EDX);
+
+    RtlCopyMemory(&Cpu->Manufacturer[0], &EBX, sizeof (ULONG));
+    RtlCopyMemory(&Cpu->Manufacturer[4], &EDX, sizeof (ULONG));
+    RtlCopyMemory(&Cpu->Manufacturer[8], &ECX, sizeof (ULONG));
+
+    Info("Manufacturer: %s\n", Cpu->Manufacturer);
+
+    __CpuId(1, NULL, &EBX, NULL, NULL);
+
+    Cpu->ApicID = EBX >> 24;
+
+    Info("Local APIC ID: %02X\n", Cpu->ApicID);
+
+    Info("<==== (%u)\n", Index);
+
+    KeReleaseSpinLockFromDpcLevel(Lock);
+    KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
+}
+
+static FORCEINLINE VOID
+__SystemGetCpuInformation(
+    VOID
+    )
+{
+    KSPIN_LOCK      Lock;
+    KDPC            Dpc[MAXIMUM_PROCESSORS];
+    KEVENT          Event[MAXIMUM_PROCESSORS];
+    PKEVENT         Object[MAXIMUM_PROCESSORS];
+    LONG            Index;
+
+    Info("====>\n");
+
+    KeInitializeSpinLock(&Lock);
+
+    for (Index = 0; Index < KeNumberProcessors; Index++) {
+        KeInitializeDpc(&Dpc[Index], SystemCpuInformation, NULL);
+        KeSetTargetProcessorDpc(&Dpc[Index], (CCHAR)Index);
+        KeSetImportanceDpc(&Dpc[Index], HighImportance);
+
+        KeInitializeEvent(&Event[Index], NotificationEvent, FALSE);
+        Object[Index] = &Event[Index];
+
+        KeInsertQueueDpc(&Dpc[Index], &Lock, &Event[Index]);
+    }
+
+    (VOID) KeWaitForMultipleObjects(KeNumberProcessors,
+                                    Object,
+                                    WaitAll,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL,
+                                    NULL);
+
+    Info("<====\n");
+}
+
 extern VOID
 SystemGetInformation(
     VOID
@@ -199,4 +297,5 @@ SystemGetInformation(
 {
     __SystemGetVersionInformation();
     __SystemGetMemoryInformation();
+    __SystemGetCpuInformation();
 }
