@@ -94,7 +94,6 @@ struct _XENBUS_FDO {
 
     XENBUS_RESOURCE                 Resource[RESOURCE_COUNT];
     PKINTERRUPT                     InterruptObject;
-    BOOLEAN                         InterruptEnabled;
 
     PXENFILT_UNPLUG_INTERFACE       UnplugInterface;
     XENBUS_SUSPEND_INTERFACE        SuspendInterface;
@@ -123,34 +122,6 @@ __FdoFree(
 {
     __FreePoolWithTag(Buffer, FDO_TAG);
 }
-
-#pragma warning(push)
-#pragma warning(disable: 28230)
-#pragma warning(disable: 28285)
-
-_IRQL_requires_max_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
-_IRQL_saves_
-_IRQL_raises_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
-static FORCEINLINE KIRQL
-__AcquireInterruptLock(
-    _Inout_ PKINTERRUPT             Interrupt
-    )
-{
-    return KeAcquireInterruptSpinLock(Interrupt);
-}
-
-_IRQL_requires_(HIGH_LEVEL) // HIGH_LEVEL is best approximation of DIRQL
-static FORCEINLINE VOID
-__ReleaseInterruptLock(
-    _Inout_ PKINTERRUPT             Interrupt,
-    _In_ _IRQL_restores_ KIRQL      Irql
-    )
-{
-#pragma prefast(suppress:28121) // The function is not permitted to be called at the current IRQ level
-    KeReleaseInterruptSpinLock(Interrupt, Irql);
-}
-
-#pragma warning(pop)
 
 static FORCEINLINE VOID
 __FdoSetDevicePnpState(
@@ -1408,15 +1379,15 @@ FdoInterrupt(
     )
 {
     PXENBUS_FDO             Fdo = Context;
+    BOOLEAN                 DoneSomething;
 
     UNREFERENCED_PARAMETER(InterruptObject);
 
     ASSERT(Fdo != NULL);
 
-    if (!Fdo->InterruptEnabled)
-        return FALSE;
+    DoneSomething = EvtchnInterrupt(&Fdo->EvtchnInterface);
 
-    return EvtchnInterrupt(&Fdo->EvtchnInterface);
+    return DoneSomething;
 }
 
 static FORCEINLINE VOID
@@ -1501,38 +1472,6 @@ FdoDisconnectInterrupt(
     Disconnect.ConnectionContext.InterruptObject = InterruptObject;
 
     IoDisconnectInterruptEx(&Disconnect);
-}
-
-static FORCEINLINE VOID
-__FdoEnableInterrupt(
-    IN  PXENBUS_FDO Fdo
-    )
-{
-    PKINTERRUPT     InterruptObject;
-    KIRQL           Irql;
-
-    InterruptObject = __FdoGetInterruptObject(Fdo);
-
-    Irql = __AcquireInterruptLock(InterruptObject);
-    Fdo->InterruptEnabled = TRUE;
-
-    __ReleaseInterruptLock(InterruptObject, Irql);
-}
-    
-static FORCEINLINE VOID
-__FdoDisableInterrupt(
-    IN  PXENBUS_FDO Fdo
-    )
-{
-    PKINTERRUPT     InterruptObject;
-    KIRQL           Irql;
-
-    InterruptObject = __FdoGetInterruptObject(Fdo);
-
-    Irql = __AcquireInterruptLock(InterruptObject);
-    Fdo->InterruptEnabled = FALSE;
-
-    __ReleaseInterruptLock(InterruptObject, Irql);
 }
 
 PXENFILT_UNPLUG_INTERFACE
@@ -2035,7 +1974,7 @@ FdoS4ToS3(
 
     __FdoSetSystemPowerState(Fdo, PowerSystemSleeping3);
 
-    __FdoEnableInterrupt(Fdo);
+    EvtchnEnable(&Fdo->EvtchnInterface);
 
     KeLowerIrql(Irql);
 
@@ -2090,7 +2029,7 @@ FdoS3ToS4(
     if (!__FdoIsActive(Fdo))
         goto done;
 
-    __FdoDisableInterrupt(Fdo);
+    EvtchnDisable(&Fdo->EvtchnInterface);
 
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
 

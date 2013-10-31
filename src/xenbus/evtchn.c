@@ -87,6 +87,7 @@ struct _XENBUS_EVTCHN_CONTEXT {
     LONG                            References;
     PXENBUS_RESOURCE                Interrupt;
     PKINTERRUPT                     InterruptObject;
+    BOOLEAN                         Enabled;
     PXENBUS_SUSPEND_INTERFACE       SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK        SuspendCallbackEarly;
     PXENBUS_DEBUG_INTERFACE         DebugInterface;
@@ -646,6 +647,31 @@ EvtchnInterrupt(
                        Context);
 }
 
+static FORCEINLINE VOID
+__EvtchnInterruptEnable(
+    IN  PXENBUS_EVTCHN_CONTEXT  Context
+    )
+{
+    NTSTATUS                    status;
+
+    status = HvmSetParam(HVM_PARAM_CALLBACK_IRQ,
+                         Context->Interrupt->Raw.u.Interrupt.Vector);
+    ASSERT(NT_SUCCESS(status));
+}
+
+static FORCEINLINE VOID
+__EvtchnInterruptDisable(
+    IN  PXENBUS_EVTCHN_CONTEXT  Context
+    )
+{
+    NTSTATUS                    status;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    status = HvmSetParam(HVM_PARAM_CALLBACK_IRQ, 0);
+    ASSERT(NT_SUCCESS(status));
+}
+
 static VOID
 EvtchnSuspendCallbackEarly(
     IN  PVOID                   Argument
@@ -653,7 +679,6 @@ EvtchnSuspendCallbackEarly(
 {
     PXENBUS_EVTCHN_CONTEXT      Context = Argument;
     PLIST_ENTRY                 ListEntry;
-    NTSTATUS                    status;
 
     for (ListEntry = Context->List.Flink;
          ListEntry != &Context->List;
@@ -672,8 +697,8 @@ EvtchnSuspendCallbackEarly(
         }
     }
 
-    status = HvmSetParam(HVM_PARAM_CALLBACK_IRQ, Context->Interrupt->Raw.u.Interrupt.Vector);
-    ASSERT(NT_SUCCESS(status));
+    if (Context->Enabled)
+        __EvtchnInterruptEnable(Context);
 }
 
 static VOID
@@ -793,9 +818,6 @@ EvtchnInitialize(
     Context->Interrupt = FdoGetResource(Fdo, INTERRUPT_RESOURCE);
     Context->InterruptObject = FdoGetInterruptObject(Fdo);
 
-    status = HvmSetParam(HVM_PARAM_CALLBACK_IRQ, Context->Interrupt->Raw.u.Interrupt.Vector);
-    ASSERT(NT_SUCCESS(status));
-
     Context->SuspendInterface = FdoGetSuspendInterface(Fdo);
 
     SUSPEND(Acquire, Context->SuspendInterface);
@@ -865,6 +887,32 @@ fail1:
 }
 
 VOID
+EvtchnEnable(
+    IN PXENBUS_EVTCHN_INTERFACE Interface
+    )
+{
+    PXENBUS_EVTCHN_CONTEXT      Context = Interface->Context;
+
+    ASSERT(!Context->Enabled);
+
+    __EvtchnInterruptEnable(Context);
+    Context->Enabled = TRUE;
+}
+
+VOID
+EvtchnDisable(
+    IN PXENBUS_EVTCHN_INTERFACE Interface
+    )
+{
+    PXENBUS_EVTCHN_CONTEXT      Context = Interface->Context;
+
+    ASSERT(Context->Enabled);
+
+    Context->Enabled = FALSE;
+    __EvtchnInterruptDisable(Context);
+}
+
+VOID
 EvtchnTeardown(
     IN OUT  PXENBUS_EVTCHN_INTERFACE    Interface
     )
@@ -892,7 +940,6 @@ EvtchnTeardown(
     SUSPEND(Release, Context->SuspendInterface);
     Context->SuspendInterface = NULL;
 
-    (VOID) HvmSetParam(HVM_PARAM_CALLBACK_IRQ, 0);
     Context->InterruptObject = NULL;
     Context->Interrupt = NULL;
 
