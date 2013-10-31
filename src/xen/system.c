@@ -252,15 +252,16 @@ SystemCpuInformation(
     KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
 }
 
+KDPC    SystemDpc[MAXIMUM_PROCESSORS];
+KEVENT  SystemEvent[MAXIMUM_PROCESSORS];
+
 static FORCEINLINE VOID
 __SystemGetCpuInformation(
     VOID
     )
 {
     KSPIN_LOCK      Lock;
-    KDPC            Dpc[MAXIMUM_PROCESSORS];
-    KEVENT          Event[MAXIMUM_PROCESSORS];
-    PKEVENT         Object[MAXIMUM_PROCESSORS];
+    PKEVENT         Event[MAXIMUM_PROCESSORS];
     LONG            Index;
 
     Info("====>\n");
@@ -268,18 +269,20 @@ __SystemGetCpuInformation(
     KeInitializeSpinLock(&Lock);
 
     for (Index = 0; Index < KeNumberProcessors; Index++) {
-        KeInitializeDpc(&Dpc[Index], SystemCpuInformation, NULL);
-        KeSetTargetProcessorDpc(&Dpc[Index], (CCHAR)Index);
-        KeSetImportanceDpc(&Dpc[Index], HighImportance);
+        PKDPC   Dpc = &SystemDpc[Index];
 
-        KeInitializeEvent(&Event[Index], NotificationEvent, FALSE);
-        Object[Index] = &Event[Index];
+        KeInitializeDpc(Dpc, SystemCpuInformation, NULL);
+        KeSetTargetProcessorDpc(Dpc, (CCHAR)Index);
+        KeSetImportanceDpc(Dpc, HighImportance);
 
-        KeInsertQueueDpc(&Dpc[Index], &Lock, &Event[Index]);
+        Event[Index] = &SystemEvent[Index];
+        KeInitializeEvent(Event[Index], NotificationEvent, FALSE);
+
+        KeInsertQueueDpc(Dpc, &Lock, Event[Index]);
     }
 
     (VOID) KeWaitForMultipleObjects(KeNumberProcessors,
-                                    Object,
+                                    Event,
                                     WaitAll,
                                     Executive,
                                     KernelMode,
