@@ -252,8 +252,9 @@ SystemCpuInformation(
     KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
 }
 
-KDPC    SystemDpc[MAXIMUM_PROCESSORS];
-KEVENT  SystemEvent[MAXIMUM_PROCESSORS];
+KDPC        SystemDpc[MAXIMUM_PROCESSORS];
+KEVENT      SystemEvent[MAXIMUM_PROCESSORS];
+KWAIT_BLOCK SystemWaitBlock[MAXIMUM_PROCESSORS];
 
 static FORCEINLINE VOID
 __SystemGetCpuInformation(
@@ -288,7 +289,7 @@ __SystemGetCpuInformation(
                                     KernelMode,
                                     FALSE,
                                     NULL,
-                                    NULL);
+                                    SystemWaitBlock);
 
     Info("<====\n");
 }
