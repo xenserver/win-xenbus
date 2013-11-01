@@ -58,6 +58,16 @@ EvtchnInterrupt(
     );
 
 extern VOID
+EvtchnEnable(
+    IN  PXENBUS_EVTCHN_INTERFACE    Interface
+    );
+
+extern VOID
+EvtchnDisable(
+    IN  PXENBUS_EVTCHN_INTERFACE    Interface
+    );
+
+extern VOID
 EvtchnTeardown(
     IN OUT  PXENBUS_EVTCHN_INTERFACE    Interface
     );
