@@ -556,6 +556,22 @@ __StoreFindWatch(
     return Watch;
 }
 
+static FORCEINLINE USHORT
+__StoreNextWatchId(
+    IN  PXENBUS_STORE_CONTEXT   Context
+    )
+{
+    USHORT                      Id;
+    PXENBUS_STORE_WATCH         Watch;
+
+    do {
+        Id = Context->WatchId++;
+        Watch = __StoreFindWatch(Context, Id);
+    } while (Watch != NULL);
+
+    return Id;
+}
+
 #if defined(__i386__)
 #define TOKEN_LENGTH    (sizeof ("TOK|XXXXXXXX|XXXX"))
 #elif defined(__x86_64__)
@@ -1555,7 +1571,7 @@ StoreWatch(
     (*Watch)->Event = Event;
 
     KeAcquireSpinLock(&Context->Lock, &Irql);
-    (*Watch)->Id = Context->WatchId++;
+    (*Watch)->Id = __StoreNextWatchId(Context);
     (*Watch)->Active = TRUE;
     InsertTailList(&Context->WatchList, &(*Watch)->ListEntry);
     KeReleaseSpinLock(&Context->Lock, Irql);
