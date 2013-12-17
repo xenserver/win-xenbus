@@ -53,9 +53,59 @@ struct _XENFILT_UNPLUG_CONTEXT {
     BOOLEAN     BlackListed;
     BOOLEAN     UnpluggedDisks;
     BOOLEAN     UnpluggedNics;
+    BOOLEAN     BootEmulated;
 };
 
 static XENFILT_UNPLUG_CONTEXT   UnplugContext;
+
+static FORCEINLINE VOID
+__UnplugGetFlags(
+    IN  PXENFILT_UNPLUG_CONTEXT Context
+    )
+{
+    HANDLE                      Key;
+    DWORD                       Value;
+    NTSTATUS                    status;
+
+    Context->BootEmulated = FALSE;
+
+    Key = DriverGetParametersKey();
+    status = RegistryQueryDwordValue(Key,
+                                     "BootEmulated",
+                                     &Value);
+    if (NT_SUCCESS(status)) {
+        LogPrintf(LOG_LEVEL_WARNING,
+                  "UNPLUG: BOOT_EMULATED %d\n",
+                  Value);
+
+        Context->BootEmulated = (Value == 1) ? TRUE : FALSE;
+    }
+}
+
+static FORCEINLINE VOID
+__UnplugDisksLocked(
+    IN  PXENFILT_UNPLUG_CONTEXT Context
+    )
+{
+    if (Context->BootEmulated) {
+        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0004);
+
+        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: AUX DISKS\n");
+    } else {
+        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
+
+        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: DISKS\n");
+    }
+}
+
+static FORCEINLINE VOID
+__UnplugNicsLocked(
+    )
+{
+    WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
+
+    LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: NICS\n");
+}
 
 static FORCEINLINE NTSTATUS
 __UnplugPreamble(
@@ -178,9 +228,7 @@ __UnplugDisks(
 
     ASSERT(!Context->UnpluggedDisks);
 
-    WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
-
-    LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: DISKS\n");
+    __UnplugDisksLocked(Context);
 
     Context->UnpluggedDisks = TRUE;
 
@@ -252,9 +300,7 @@ __UnplugNics(
 
     ASSERT(!Context->UnpluggedNics);
 
-    WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
-
-    LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: NICS\n");
+    __UnplugNicsLocked();
 
     Context->UnpluggedNics = TRUE;
 
@@ -282,13 +328,11 @@ UnplugReplay(
     ASSERT(NT_SUCCESS(status));
 
     if (Context->UnpluggedDisks) {
-        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0001);
-        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: DISKS\n");
+        __UnplugDisksLocked(Context);
     }
 
     if (Context->UnpluggedNics) {
-        WRITE_PORT_USHORT((PUSHORT)0x10, 0x0002);
-        LogPrintf(LOG_LEVEL_WARNING, "UNPLUG: NICS\n");
+        __UnplugNicsLocked();
     }
     
     ReleaseHighLock(&Context->Lock, Irql);
@@ -339,6 +383,8 @@ UnplugInitialize(
 
     InitializeHighLock(&Context->Lock);
 
+    __UnplugGetFlags(Context);
+
     status = __UnplugPreamble(Context, FALSE);
     if (!NT_SUCCESS(status))
         goto fail1;
@@ -358,6 +404,7 @@ fail1:
     Error("fail1 (%08x)\n", status);
 
     RtlZeroMemory(&Context->Lock, sizeof (HIGH_LOCK));
+    Context->BootEmulated = FALSE;
 
     (VOID) InterlockedDecrement(&Context->References);
 
@@ -381,6 +428,7 @@ UnplugTeardown(
         goto done;
 
     Context->BlackListed = FALSE;
+    Context->BootEmulated = FALSE;
 
     RtlZeroMemory(&Context->Lock, sizeof (HIGH_LOCK));
 
