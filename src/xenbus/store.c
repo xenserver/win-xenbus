@@ -912,29 +912,33 @@ __StoreCheckResponse(
 {
     NTSTATUS            status;
 
-    status = STATUS_UNSUCCESSFUL;
+    status = STATUS_SUCCESS;
+
     if (Response->Header.type == XS_ERROR) {
+        PCHAR   Error = Response->Segment[RESPONSE_PAYLOAD_SEGMENT].Data;
+        ULONG   Length = Response->Segment[RESPONSE_PAYLOAD_SEGMENT].Length;
         ULONG   Index;
+
+        if (strncmp(Error, "EQUOTA", Length) == 0) {
+            status = STATUS_QUOTA_EXCEEDED;
+            goto done;
+        }
 
         for (Index = 0;
              Index < sizeof (xsd_errors) / sizeof (xsd_errors[0]);
              Index++) {
             struct xsd_errors   *Entry = &xsd_errors[Index];
-            PCHAR               Error = Response->Segment[RESPONSE_PAYLOAD_SEGMENT].Data;
-            ULONG               Length = Response->Segment[RESPONSE_PAYLOAD_SEGMENT].Length;
             
             if (strncmp(Error, Entry->errstring, Length) == 0) {
                 ERRNO_TO_STATUS(Entry->errnum, status);
-                break;
+                goto done;
             }
         }
 
-        goto fail1;
+        status = STATUS_UNSUCCESSFUL;
     }
 
-    return STATUS_SUCCESS;
-
-fail1:
+done:
     return status;
 }
 
