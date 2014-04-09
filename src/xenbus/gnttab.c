@@ -43,7 +43,9 @@
 #define GNTTAB_MAXIMUM_FRAME_COUNT    32
 #define GNTTAB_ENTRY_PER_FRAME              (PAGE_SIZE / sizeof (grant_entry_v1_t))
 
-#define GNTTAB_RESERVED_ENTRY_COUNT 8
+// Xen requires that we avoid the first 8 entries of the table and
+// we also reserve 1 entry for the crash kernel
+#define GNTTAB_RESERVED_ENTRY_COUNT 9
 
 #define GNTTAB_INVALID_REFERENCE    0
 
