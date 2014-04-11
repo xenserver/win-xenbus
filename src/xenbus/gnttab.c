@@ -37,27 +37,22 @@
 
 #include "gnttab.h"
 #include "fdo.h"
+#include "range_set.h"
+#include "pool.h"
 #include "dbg_print.h"
 #include "assert.h"
 
-#define GNTTAB_MAXIMUM_FRAME_COUNT    32
-#define GNTTAB_ENTRY_PER_FRAME              (PAGE_SIZE / sizeof (grant_entry_v1_t))
+#define GNTTAB_MAXIMUM_FRAME_COUNT  32
+#define GNTTAB_ENTRY_PER_FRAME      (PAGE_SIZE / sizeof (grant_entry_v1_t))
 
 // Xen requires that we avoid the first 8 entries of the table and
 // we also reserve 1 entry for the crash kernel
 #define GNTTAB_RESERVED_ENTRY_COUNT 9
 
-#define GNTTAB_INVALID_REFERENCE    0
-
-#define GNTTAB_IS_INVALID_REFERENCE(_Reference) \
-        ((_Reference) < GNTTAB_RESERVED_ENTRY_COUNT)
-
-typedef struct _GNTTAB_DESCRIPTOR {
-    LIST_ENTRY          ListEntry;
-    ULONG               Next;
-    PVOID               Caller;
+struct _XENBUS_GNTTAB_DESCRIPTOR {
+    ULONG               Reference;
     grant_entry_v1_t    Entry;
-} GNTTAB_DESCRIPTOR, *PGNTTAB_DESCRIPTOR;
+};
 
 struct _XENBUS_GNTTAB_CONTEXT {
     LONG                        References;
@@ -65,10 +60,8 @@ struct _XENBUS_GNTTAB_CONTEXT {
     ULONG                       FrameCount;
     grant_entry_v1_t            *Entry;
     KSPIN_LOCK                  Lock;
-    ULONG                       HeadFreeReference;
-    PULONG                      TailFreeReference;
-    GNTTAB_DESCRIPTOR           Descriptor[GNTTAB_MAXIMUM_FRAME_COUNT * GNTTAB_ENTRY_PER_FRAME];
-    LIST_ENTRY                  List;
+    PXENBUS_RANGE_SET           RangeSet;
+    PXENBUS_POOL                DescriptorPool;
     PXENBUS_SUSPEND_INTERFACE   SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK    SuspendCallbackEarly;
     PXENBUS_DEBUG_INTERFACE     DebugInterface;
@@ -93,16 +86,15 @@ __GnttabFree(
     __FreePoolWithTag(Buffer, GNTTAB_TAG);
 }
 
-static NTSTATUS
-GnttabExpand(
+static FORCEINLINE NTSTATUS
+__GnttabExpand(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
     ULONG                       FrameIndex;
     PFN_NUMBER                  Pfn;
-    ULONG                       Start;
-    ULONG                       End;
-    ULONG                       Reference;
+    ULONGLONG                   Start;
+    ULONGLONG                   End;
     NTSTATUS                    status;
 
     FrameIndex = Context->FrameCount;
@@ -124,18 +116,130 @@ GnttabExpand(
     Start = __max(GNTTAB_RESERVED_ENTRY_COUNT, FrameIndex * GNTTAB_ENTRY_PER_FRAME);
     End = (Context->FrameCount * GNTTAB_ENTRY_PER_FRAME) - 1;
 
-    Trace("adding refrences [%08x - %08x]\n", Start, End);
+    Trace("adding refrences [%08llx - %08llx]\n", Start, End);
 
-    for (Reference = Start; Reference <= End; Reference++) {
-        PGNTTAB_DESCRIPTOR  Descriptor = &Context->Descriptor[Reference];
-
-        *Context->TailFreeReference = Reference;
-
-        ASSERT(GNTTAB_IS_INVALID_REFERENCE(Descriptor->Next));
-        Context->TailFreeReference = &Descriptor->Next;
-    }
+    RangeSetPut(Context->RangeSet, Start, End);
 
     return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+static NTSTATUS
+GnttabDescriptorCtor(
+    IN  PVOID                   Argument,
+    IN  PVOID                   Object
+    )
+{
+    PXENBUS_GNTTAB_CONTEXT      Context = Argument;
+    PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
+    NTSTATUS                    status;
+
+    if (!RangeSetIsEmpty(Context->RangeSet))
+        goto done;
+
+    status = __GnttabExpand(Context);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+done:
+    Descriptor->Reference = (ULONG)RangeSetPop(Context->RangeSet);
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+static VOID
+GnttabDescriptorDtor(
+    IN  PVOID                   Argument,
+    IN  PVOID                   Object
+    )
+{
+    PXENBUS_GNTTAB_CONTEXT      Context = Argument;
+    PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
+    NTSTATUS                    status;
+
+    status = RangeSetPut(Context->RangeSet,
+                         (ULONGLONG)Descriptor->Reference,
+                         (ULONGLONG)Descriptor->Reference);
+    ASSERT(NT_SUCCESS(status));
+}
+
+static FORCEINLINE VOID
+__drv_requiresIRQL(DISPATCH_LEVEL)
+__GnttabAcquireLock(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
+
+    KeAcquireSpinLockAtDpcLevel(&Context->Lock);
+}
+
+static DECLSPEC_NOINLINE VOID
+GnttabAcquireLock(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    __GnttabAcquireLock(Context);
+}
+
+static FORCEINLINE VOID
+__drv_requiresIRQL(DISPATCH_LEVEL)
+__GnttabReleaseLock(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
+
+#pragma prefast(disable:26110)
+    KeReleaseSpinLockFromDpcLevel(&Context->Lock);
+}
+
+static DECLSPEC_NOINLINE VOID
+GnttabReleaseLock(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    __GnttabReleaseLock(Context);
+}
+
+static FORCEINLINE NTSTATUS
+__GnttabFill(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    NTSTATUS                    status;
+
+    status = RangeSetInitialize(&Context->RangeSet);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    status = PoolInitialize("GnttabDescriptor",
+                            sizeof (XENBUS_GNTTAB_DESCRIPTOR),
+                            GnttabDescriptorCtor,
+                            GnttabDescriptorDtor,
+                            GnttabAcquireLock,
+                            GnttabReleaseLock,
+                            Context,
+                            &Context->DescriptorPool);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    RangeSetTeardown(Context->RangeSet);
+    Context->RangeSet = NULL;
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -148,128 +252,56 @@ __GnttabEmpty(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    while (!GNTTAB_IS_INVALID_REFERENCE(Context->HeadFreeReference)) {
-        ULONG               Reference = Context->HeadFreeReference;
-        PGNTTAB_DESCRIPTOR  Descriptor = &Context->Descriptor[Reference];
+    ULONGLONG                   Entry;
 
-        Context->HeadFreeReference = Descriptor->Next;
-        Descriptor->Next = GNTTAB_INVALID_REFERENCE;
+    PoolTeardown(Context->DescriptorPool);
+    Context->DescriptorPool = NULL;
+
+    for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
+         Entry < Context->FrameCount * GNTTAB_ENTRY_PER_FRAME;
+         Entry++) {
+        NTSTATUS    status;
+
+        status = RangeSetGet(Context->RangeSet, Entry);
+        ASSERT(NT_SUCCESS(status));
     }
 
-    Context->TailFreeReference = &Context->HeadFreeReference;
+    RangeSetTeardown(Context->RangeSet);
+    Context->RangeSet = NULL;
 }
 
-extern USHORT
-RtlCaptureStackBackTrace(
-    __in        ULONG   FramesToSkip,
-    __in        ULONG   FramesToCapture,
-    __out       PVOID   *BackTrace,
-    __out_opt   PULONG  BackTraceHash
-    );
-
-static NTSTATUS
+static PXENBUS_GNTTAB_DESCRIPTOR
 GnttabGet(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context,
-    OUT PULONG                  Reference
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    PGNTTAB_DESCRIPTOR          Descriptor;
-    KIRQL                       Irql;
-    NTSTATUS                    status;
-
-    KeAcquireSpinLock(&Context->Lock, &Irql);
-
-    if (!GNTTAB_IS_INVALID_REFERENCE(Context->HeadFreeReference))
-        goto done;
-
-    ASSERT3P(Context->TailFreeReference, ==, &Context->HeadFreeReference);
-
-    status = GnttabExpand(Context);
-    if (!NT_SUCCESS(status))
-        goto fail1;
-
-done:
-    ASSERT(!GNTTAB_IS_INVALID_REFERENCE(Context->HeadFreeReference));
-
-    *Reference = Context->HeadFreeReference;
-    Descriptor = &Context->Descriptor[*Reference];
-
-    Context->HeadFreeReference = Descriptor->Next;
-
-    if (GNTTAB_IS_INVALID_REFERENCE(Context->HeadFreeReference))
-        Context->TailFreeReference = &Context->HeadFreeReference;
-
-    Descriptor->Next = GNTTAB_INVALID_REFERENCE;
-
-    ASSERT(IsZeroMemory(Descriptor, sizeof (GNTTAB_DESCRIPTOR)));
-
-    InsertTailList(&Context->List, &Descriptor->ListEntry);
-
-    KeReleaseSpinLock(&Context->Lock, Irql);
-
-    (VOID) RtlCaptureStackBackTrace(1, 1, &Descriptor->Caller, NULL);    
-
-    return STATUS_SUCCESS;
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    KeReleaseSpinLock(&Context->Lock, Irql);
-
-    return status;
+    return PoolGet(Context->DescriptorPool, FALSE);
 }
 
 static VOID
 GnttabPut(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context,
-    IN  ULONG                   Reference
+    IN  PXENBUS_GNTTAB_CONTEXT      Context,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
     )
 {
-    KIRQL                       Irql;
-    PGNTTAB_DESCRIPTOR          Descriptor;
-
-    ASSERT(!GNTTAB_IS_INVALID_REFERENCE(Reference));
-
-    Descriptor = &Context->Descriptor[Reference];
-
-    Descriptor->Caller = NULL;
-
-    KeAcquireSpinLock(&Context->Lock, &Irql);
-
-    RemoveEntryList(&Descriptor->ListEntry);
-    RtlZeroMemory(&Descriptor->ListEntry, sizeof (LIST_ENTRY));
-
-    ASSERT(IsZeroMemory(Descriptor, sizeof (GNTTAB_DESCRIPTOR)));
-
-    ASSERT(GNTTAB_IS_INVALID_REFERENCE(Descriptor->Next));
-
-    *Context->TailFreeReference = Reference;
-
-    ASSERT(GNTTAB_IS_INVALID_REFERENCE(Descriptor->Next));
-    Context->TailFreeReference = &Descriptor->Next;
-
-    KeReleaseSpinLock(&Context->Lock, Irql);
+    PoolPut(Context->DescriptorPool, Descriptor, FALSE);
 }
 
 static FORCEINLINE NTSTATUS
 __GnttabPermitForeignAccessFullPage( 
-    IN  PXENBUS_GNTTAB_CONTEXT  Context,
-    IN  ULONG                   Reference,
-    IN  USHORT                  Domain,
-    IN  va_list                 Arguments
+    IN  PXENBUS_GNTTAB_CONTEXT      Context,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor,
+    IN  USHORT                      Domain,
+    IN  va_list                     Arguments
     )
 {
-    PGNTTAB_DESCRIPTOR          Descriptor;
-    PFN_NUMBER                  Frame;
-    BOOLEAN                     ReadOnly;
-    grant_entry_v1_t            *Entry;
-
-    ASSERT(!GNTTAB_IS_INVALID_REFERENCE(Reference));
+    PFN_NUMBER                      Frame;
+    BOOLEAN                         ReadOnly;
+    grant_entry_v1_t                *Entry;
 
     Frame = va_arg(Arguments, PFN_NUMBER);
     ReadOnly = va_arg(Arguments, BOOLEAN);
 
-    Descriptor = &Context->Descriptor[Reference];
     ASSERT(IsZeroMemory(&Descriptor->Entry, sizeof (grant_entry_v1_t)));
 
     Descriptor->Entry.flags = (ReadOnly) ? GTF_readonly : 0;
@@ -278,7 +310,7 @@ __GnttabPermitForeignAccessFullPage(
     Descriptor->Entry.frame = (uint32_t)Frame;
     ASSERT3U(Descriptor->Entry.frame, ==, Frame);
 
-    Entry = &Context->Entry[Reference];
+    Entry = &Context->Entry[Descriptor->Reference];
 
     *Entry = Descriptor->Entry;
     KeMemoryBarrier();
@@ -292,7 +324,7 @@ __GnttabPermitForeignAccessFullPage(
 static NTSTATUS
 GnttabPermitForeignAccess(
     IN  PXENBUS_GNTTAB_CONTEXT      Context,
-    IN  ULONG                       Reference,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor,
     IN  USHORT                      Domain,
     IN  XENBUS_GNTTAB_ENTRY_TYPE    Type,
     ...
@@ -304,7 +336,7 @@ GnttabPermitForeignAccess(
     va_start(Arguments, Type);
     switch (Type) {
     case GNTTAB_ENTRY_FULL_PAGE:
-        status =__GnttabPermitForeignAccessFullPage(Context, Reference, Domain, Arguments);
+        status =__GnttabPermitForeignAccessFullPage(Context, Descriptor, Domain, Arguments);
         break;
 
     default:
@@ -318,17 +350,16 @@ GnttabPermitForeignAccess(
 
 static NTSTATUS
 GnttabRevokeForeignAccess(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context,
-    IN  ULONG                   Reference
+    IN  PXENBUS_GNTTAB_CONTEXT      Context,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
     )
 {
-    grant_entry_v1_t            *Entry;
-    volatile SHORT              *Flags;
-    PGNTTAB_DESCRIPTOR          Descriptor;
-    ULONG                       Attempt;
-    NTSTATUS                    status;
+    grant_entry_v1_t                *Entry;
+    volatile SHORT                  *Flags;
+    ULONG                           Attempt;
+    NTSTATUS                        status;
 
-    Entry = &Context->Entry[Reference];
+    Entry = &Context->Entry[Descriptor->Reference];
     Flags = (volatile SHORT *)&Entry->flags;
 
     Attempt = 0;
@@ -352,8 +383,6 @@ GnttabRevokeForeignAccess(
         goto fail1;
 
     RtlZeroMemory(Entry, sizeof (grant_entry_v1_t));
-
-    Descriptor = &Context->Descriptor[Reference];
     RtlZeroMemory(&Descriptor->Entry, sizeof (grant_entry_v1_t));
 
     return STATUS_SUCCESS;
@@ -364,79 +393,15 @@ fail1:
     return status;
 }
 
-static NTSTATUS
-GnttabCopy(
-    IN  PXENBUS_GNTTAB_CONTEXT          Context,
-    IN  PLIST_ENTRY                     List,
-    IN  ULONG                           Count
+static ULONG
+GnttabReference(
+    IN  PXENBUS_GNTTAB_CONTEXT      Context,
+    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
     )
 {
-    struct gnttab_copy                  *op;
-    PLIST_ENTRY                         ListEntry;
-    ULONG                               Index;
-    NTSTATUS                            status;
-
     UNREFERENCED_PARAMETER(Context);
 
-    op = __GnttabAllocate(sizeof (struct gnttab_copy) * Count);
-
-    status = STATUS_NO_MEMORY;
-    if (op == NULL)
-        goto fail1;
-
-    Index = 0;
-    for (ListEntry = List->Flink;
-         ListEntry != List;
-         ListEntry = ListEntry->Flink) {
-        PXENBUS_GNTTAB_COPY_OPERATION   Operation;
-
-        Operation = CONTAINING_RECORD(ListEntry, XENBUS_GNTTAB_COPY_OPERATION, ListEntry);
-
-        ASSERT3U(Operation->Length, <=, PAGE_SIZE);
-        ASSERT3U(Operation->Offset + Operation->Length, <=, PAGE_SIZE);
-        ASSERT3U(Operation->RemoteOffset + Operation->Length, <=, PAGE_SIZE);
-
-        op[Index].source.domid = Operation->RemoteDomain;
-        op[Index].source.u.ref = Operation->RemoteReference;
-        op[Index].source.offset = (USHORT)Operation->RemoteOffset;
-
-        op[Index].dest.domid = DOMID_SELF;
-        op[Index].dest.u.gmfn = Operation->Pfn;
-        op[Index].dest.offset = (USHORT)Operation->Offset;
-
-        op[Index].len = (USHORT)Operation->Length;
-        op[Index].flags = GNTCOPY_source_gref;
-
-        Index++;
-    }
-    ASSERT3U(Index, ==, Count);
-
-    status = GrantTableCopy(op, Count);
-    if (!NT_SUCCESS(status))
-        goto fail2;
-
-    status = STATUS_UNSUCCESSFUL;
-    for (Index = 0; Index < Count; Index++) {
-        if (op[Index].status != 0)
-            goto fail3;
-    }
-
-    __GnttabFree(op);
-
-    return STATUS_SUCCESS;
-
-fail3:
-    Error("fail3\n");
-
-fail2:
-    Error("fail2\n");
-
-    __GnttabFree(op);
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    return status;
+    return (ULONG)Descriptor->Reference;
 }
 
 static VOID
@@ -513,6 +478,10 @@ GnttabDebugCallback(
     )
 {
     PXENBUS_GNTTAB_CONTEXT  Context = Argument;
+    ULONG                   Allocated;
+    ULONG                   MaximumAllocated;
+    ULONG                   Count;
+    ULONG                   MinimumCount;
 
     UNREFERENCED_PARAMETER(Crashing);
 
@@ -527,6 +496,26 @@ GnttabDebugCallback(
           Context->DebugCallback,
           "FrameCount = %u\n",
           Context->FrameCount);
+
+    PoolGetStatistics(Context->DescriptorPool,
+                      &Allocated,
+                      &MaximumAllocated,
+                      &Count,
+                      &MinimumCount);
+
+    DEBUG(Printf,
+          Context->DebugInterface,
+          Context->DebugCallback,
+          "DESCRIPTOR POOL: Allocated = %u (Maximum = %u)\n",
+          Allocated,
+          MaximumAllocated);
+
+    DEBUG(Printf,
+          Context->DebugInterface,
+          Context->DebugCallback,
+          "DESCRIPTOR POOL: Count = %u (Minimum = %u)\n",
+          Count,
+          MinimumCount);
 }
                      
 NTSTATUS
@@ -568,13 +557,9 @@ GnttabInitialize(
 
     Info("grant_entry_v1_t *: %p\n", Context->Entry);
 
-    InitializeListHead(&Context->List);
     KeInitializeSpinLock(&Context->Lock);
 
-    ASSERT(GNTTAB_IS_INVALID_REFERENCE(Context->HeadFreeReference));
-    Context->TailFreeReference = &Context->HeadFreeReference;
-
-    GnttabExpand(Context);
+    __GnttabFill(Context);
 
     Context->SuspendInterface = FdoGetSuspendInterface(Fdo);
 
@@ -628,10 +613,7 @@ fail3:
 
     __GnttabEmpty(Context);
 
-    Context->TailFreeReference = NULL;
-
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
-    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
 
     Context->Entry = NULL;
 
@@ -663,9 +645,6 @@ GnttabTeardown(
 
     Trace("====>\n");
 
-    if (!IsListEmpty(&Context->List))
-        BUG("OUTSTANDING REFERENCES");
-
     DEBUG(Deregister,
           Context->DebugInterface,
           Context->DebugCallback);
@@ -684,10 +663,7 @@ GnttabTeardown(
 
     __GnttabEmpty(Context);
 
-    Context->TailFreeReference = NULL;
-
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
-    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
 
     Context->Entry = NULL;
 

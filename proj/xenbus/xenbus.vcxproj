@@ -90,6 +90,7 @@
 		<ClCompile Include="..\..\src\xenbus\thread.c" />
 		<ClCompile Include="..\..\src\xenbus\range_set.c" />
 		<ClCompile Include="..\..\src\xenbus\balloon.c" />
+		<ClCompile Include="..\..\src\xenbus\pool.c" />
 	</ItemGroup>
 	<ItemGroup>
 		<ResourceCompile Include="..\..\src\xenbus\xenbus.rc" />
