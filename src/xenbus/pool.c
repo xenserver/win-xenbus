@@ -441,6 +441,8 @@ PoolDpc(
     UNREFERENCED_PARAMETER(Argument1);
     UNREFERENCED_PARAMETER(Argument2);
 
+    ASSERT(Pool);
+
     InitializeListHead(&List);
 
     Pool->AcquireLock(Pool->Argument);
