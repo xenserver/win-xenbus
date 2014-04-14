@@ -333,11 +333,11 @@ if __name__ == '__main__':
 
     release = 'Windows Vista'
 
-    #build_sln(driver, release, 'x86', debug[sys.argv[1]])
-    #build_sln(driver, release, 'x64', debug[sys.argv[1]])
+    build_sln(driver, release, 'x86', debug[sys.argv[1]])
+    build_sln(driver, release, 'x64', debug[sys.argv[1]])
 
-    #symstore_add(driver, release, 'x86', debug[sys.argv[1]])
-    #symstore_add(driver, release, 'x64', debug[sys.argv[1]])
+    symstore_add(driver, release, 'x86', debug[sys.argv[1]])
+    symstore_add(driver, release, 'x64', debug[sys.argv[1]])
 
     if len(sys.argv) <= 2 or sys.argv[2] != 'nosdv':
         run_sdv('xen', driver)
