@@ -179,6 +179,14 @@ __RangeSetMergeForwards(
     __RangeSetRemove(RangeSet, TRUE);
 }
 
+BOOLEAN
+RangeSetIsEmpty(
+    IN  PXENBUS_RANGE_SET   RangeSet
+    )
+{
+    return IsListEmpty(&RangeSet->List);
+}
+
 ULONGLONG
 RangeSetPop(
     IN  PXENBUS_RANGE_SET   RangeSet

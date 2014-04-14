@@ -29,44 +29,50 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XENBUS_RANGE_SET_H
-#define _XENBUS_RANGE_SET_H
+#ifndef _XENBUS_POOL_H
+#define _XENBUS_POOL_H
 
 #include <ntddk.h>
 
-typedef struct _XENBUS_RANGE_SET   XENBUS_RANGE_SET, *PXENBUS_RANGE_SET;
-
-extern BOOLEAN
-RangeSetIsEmpty(
-    IN  PXENBUS_RANGE_SET   RangeSet
-    );
-
-extern ULONGLONG
-RangeSetPop(
-    IN  PXENBUS_RANGE_SET   RangeSet
-    );
+typedef struct _XENBUS_POOL XENBUS_POOL, *PXENBUS_POOL;
 
 extern NTSTATUS
-RangeSetGet(
-    IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Item
-    );
-
-extern NTSTATUS
-RangeSetPut(
-    IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Start,
-    IN  ULONGLONG           End
-    );
-
-extern NTSTATUS
-RangeSetInitialize(
-    OUT PXENBUS_RANGE_SET   *RangeSet
+PoolInitialize(
+    IN  const CHAR      *Name,
+    IN  ULONG           Size,
+    IN  NTSTATUS        (*Ctor)(PVOID, PVOID),
+    IN  VOID            (*Dtor)(PVOID, PVOID),
+    IN  VOID            (*AcquireLock)(PVOID),
+    IN  VOID            (*ReleaseLock)(PVOID),
+    IN  PVOID           Argument,
+    OUT PXENBUS_POOL    *Pool
     );
 
 extern VOID
-RangeSetTeardown(
-    IN  PXENBUS_RANGE_SET   RangeSet
+PoolTeardown(
+    IN  PXENBUS_POOL    Pool
     );
 
-#endif  // _XENBUS_RANGE_SET_H
+extern PVOID
+PoolGet(
+    IN  PXENBUS_POOL    Pool,
+    IN  BOOLEAN         Locked
+    );
+
+extern VOID
+PoolPut(
+    IN  PXENBUS_POOL    Pool,
+    IN  PVOID           Object,
+    IN  BOOLEAN         Locked
+    );
+
+extern VOID
+PoolGetStatistics(
+    IN  PXENBUS_POOL    Pool,
+    OUT PULONG          Allocated,
+    OUT PULONG          MaximumAllocated,
+    OUT PULONG          Count,
+    OUT PULONG          MinimumCount
+    );
+
+#endif  // _XENBUS_POOL_H
