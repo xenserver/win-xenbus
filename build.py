@@ -7,6 +7,7 @@ import glob
 import tarfile
 import subprocess
 import shutil
+import time
 
 def next_build_number():
     try:
@@ -122,6 +123,7 @@ def get_configuration(release, debug):
 
     return configuration
 
+
 def get_target_path(release, arch, debug):
     configuration = get_configuration(release, debug)
     name = ''.join(configuration.split(' '))
@@ -131,16 +133,22 @@ def get_target_path(release, arch, debug):
     return target_path
 
 
-def shell(command):
+def shell(command, dir):
+    print(dir)
     print(command)
     sys.stdout.flush()
+    
+    sub = subprocess.Popen(' '.join(command), cwd=dir,
+                           stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, 
+                           universal_newlines=True)
 
-    pipe = os.popen(command, 'r', -1)
-
-    for line in pipe:
+    for line in sub.stdout:
         print(line.rstrip())
 
-    return pipe.close()
+    sub.wait()
+
+    return sub.returncode
 
 
 class msbuild_failure(Exception):
@@ -156,18 +164,13 @@ def msbuild(platform, configuration, target, file, args, dir):
     os.environ['FILE'] = file
     os.environ['EXTRA'] = args
 
-    cwd = os.getcwd()
-    bin = os.path.join(cwd, 'msbuild.bat')
+    bin = os.path.join(os.getcwd(), 'msbuild.bat')
 
-    print(bin)
-    print(dir)
+    status = shell([bin], dir)
 
-    os.chdir(dir)
-    status = shell(bin)
-    os.chdir(cwd)
-
-    if (status != None):
+    if (status != 0):
         raise msbuild_failure(configuration)
+
 
 def build_sln(name, release, arch, debug):
     configuration = get_configuration(release, debug)
@@ -180,6 +183,7 @@ def build_sln(name, release, arch, debug):
     cwd = os.getcwd()
 
     msbuild(platform, configuration, 'Build', name + '.sln', '', 'proj')
+
 
 def remove_timestamps(path):
     try:
@@ -199,19 +203,40 @@ def remove_timestamps(path):
     dst.close()
     src.close()
 
+def sdv_clean(name):
+    path = ['proj', name, 'sdv']
+    print(path)
+
+    try:
+        shutil.rmtree(os.path.join(*path))
+    except FileNotFoundError:
+        pass
+
+    path = ['proj', name, 'sdv.temp']
+    print(path)
+
+    try:
+        shutil.rmtree(os.path.join(*path))
+    except FileNotFoundError:
+        pass
+
+    path = ['proj', name, 'staticdv.job']
+    print(path)
+
+    try:
+        os.unlink(os.path.join(*path))
+    except OSError:
+        pass
+
+
 def run_sdv(name, dir):
     configuration = get_configuration('Windows 8', False)
     platform = 'x64'
 
     msbuild(platform, configuration, 'Build', name + '.vcxproj',
             '', os.path.join('proj', name))
-    msbuild(platform, configuration, 'sdv', name + '.vcxproj',
-            '/p:Inputs="/clean"', os.path.join('proj', name))
 
-    path = ['proj', name, 'sdv']
-    shutil.rmtree(os.path.join(*path), True)
-    path = ['proj', name, 'sdv.temp']
-    shutil.rmtree(os.path.join(*path), True)
+    sdv_clean(name)
 
     msbuild(platform, configuration, 'sdv', name + '.vcxproj',
             '/p:Inputs="/check:default.sdv"', os.path.join('proj', name))
@@ -224,6 +249,7 @@ def run_sdv(name, dir):
 
     path = ['proj', name, name + '.DVL.XML']
     shutil.copy(os.path.join(*path), dir)
+
 
 def symstore_del(name, age):
     symstore_path = [os.environ['KIT'], 'Debuggers']
@@ -243,10 +269,10 @@ def symstore_del(name, age):
         command.append('/s')
         command.append(os.environ['SYMBOL_SERVER'])
 
-        shell(' '.join(command))
+        shell(command, None)
+
 
 def symstore_add(name, release, arch, debug):
-    cwd = os.getcwd()
     target_path = get_target_path(release, arch, debug)
 
     symstore_path = [os.environ['KIT'], 'Debuggers']
@@ -263,7 +289,6 @@ def symstore_add(name, release, arch, debug):
                         os.environ['MICRO_VERSION'],
                         os.environ['BUILD_NUMBER']])
 
-    os.chdir(target_path)
     command=['"' + symstore + '"']
     command.append('add')
     command.append('/s')
@@ -276,13 +301,11 @@ def symstore_add(name, release, arch, debug):
     command.append('/v')
     command.append(version)
 
-    shell(' '.join(command))
-
-    os.chdir(cwd)
+    shell(command, target_path)
 
 
-def callfnout(cmd):
-    print(cmd)
+def manifest():
+    cmd = ['git', 'ls-tree', '-r', '--name-only', 'HEAD']
 
     sub = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     output = sub.communicate()[0]
@@ -309,6 +332,7 @@ def archive(filename, files, tgz=False):
 
 if __name__ == '__main__':
     debug = { 'checked': True, 'free': False }
+    sdv = { 'nosdv': False, None: True }
     driver = 'xenbus'
 
     os.environ['MAJOR_VERSION'] = '7'
@@ -339,12 +363,11 @@ if __name__ == '__main__':
     symstore_add(driver, release, 'x86', debug[sys.argv[1]])
     symstore_add(driver, release, 'x64', debug[sys.argv[1]])
 
-    if len(sys.argv) <= 2 or sys.argv[2] != 'nosdv':
+    if len(sys.argv) <= 2 or sdv[sys.argv[2]]:
         run_sdv('xen', driver)
         run_sdv('xenfilt', driver)
         run_sdv('xenbus', driver)
 
-    listfile = callfnout(['git','ls-tree', '-r', '--name-only', 'HEAD'])   
-    archive(driver + '\\source.tgz', listfile.splitlines(), tgz=True)
+    archive(driver + '\\source.tgz', manifest().splitlines(), tgz=True)
     archive(driver + '.tar', [driver,'revision'])
 
