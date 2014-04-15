@@ -207,18 +207,12 @@ def sdv_clean(name):
     path = ['proj', name, 'sdv']
     print(path)
 
-    try:
-        shutil.rmtree(os.path.join(*path))
-    except FileNotFoundError:
-        pass
+    shutil.rmtree(os.path.join(*path), True)
 
     path = ['proj', name, 'sdv.temp']
     print(path)
 
-    try:
-        shutil.rmtree(os.path.join(*path))
-    except FileNotFoundError:
-        pass
+    shutil.rmtree(os.path.join(*path), True)
 
     path = ['proj', name, 'staticdv.job']
     print(path)
