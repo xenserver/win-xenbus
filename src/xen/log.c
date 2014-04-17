@@ -36,6 +36,7 @@
 #include <ntddk.h>
 #include <stdlib.h>
 
+#include "registry.h"
 #include "log.h"
 #include "assert.h"
 #include "high.h"
@@ -501,8 +502,17 @@ LogDebugPrint(
     if (Ansi->Length == 0 || Ansi->Buffer == NULL)
         return;
 
-    if (ComponentId != DPFLTR_IHVDRIVER_ID)
+    // If this is not a debug build then apply an aggressive
+    // filter to reduce the noise.
+#if !DBG
+    if (Ansi->Length < sizeof ("XEN"))
         return;
+
+    if (Ansi->Buffer[0] != 'X' ||
+        Ansi->Buffer[1] != 'E' ||
+        Ansi->Buffer[2] != 'N')
+        return;
+#endif
 
     AcquireHighLock(&Context->Lock, &Irql);
 
@@ -609,6 +619,34 @@ LogRemoveDisposition(
     ReleaseHighLock(&Context->Lock, Irql);
 }
 
+static FORCEINLINE BOOLEAN
+__LogDbgPrintCallbackEnable(
+    VOID
+    )
+{
+    CHAR            Key[] = "XEN:DBG_PRINT=";
+    PANSI_STRING    Option;
+    PCHAR           Value;
+    BOOLEAN         Enable;
+    NTSTATUS        status;
+
+    Enable = TRUE;
+
+    status = RegistryQuerySystemStartOption(Key, &Option);
+    if (!NT_SUCCESS(status))
+        goto done;
+
+    Value = Option->Buffer + sizeof (Key) - 1;
+
+    if (strcmp(Value, "OFF") == 0)
+        Enable = FALSE;
+
+    RegistryFreeSzValue(Option);
+
+done:
+    return Enable;
+}
+
 NTSTATUS
 LogInitialize(
     VOID)
@@ -625,10 +663,12 @@ LogInitialize(
 
     InitializeHighLock(&Context->Lock);
 
-    ASSERT(!Context->Enabled);
+    if (__LogDbgPrintCallbackEnable()) {
+        status = DbgSetDebugPrintCallback(LogDebugPrint, TRUE);
 
-    status = DbgSetDebugPrintCallback(LogDebugPrint, TRUE);
-    Context->Enabled = NT_SUCCESS(status) ? TRUE : FALSE;
+        ASSERT(!Context->Enabled);
+        Context->Enabled = NT_SUCCESS(status) ? TRUE : FALSE;
+    }
 
     return STATUS_SUCCESS;
 

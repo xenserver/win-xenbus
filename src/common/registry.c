@@ -87,7 +87,9 @@ RegistryTeardown(
 }
 
 NTSTATUS
-RegistryOpenServiceKey(
+RegistryOpenKey(
+    IN  HANDLE          Parent,
+    IN  PUNICODE_STRING Path,
     IN  ACCESS_MASK     DesiredAccess,
     OUT PHANDLE         Key
     )
@@ -96,9 +98,9 @@ RegistryOpenServiceKey(
     NTSTATUS            status;
 
     InitializeObjectAttributes(&Attributes,
-                               &RegistryPath,
+                               Path,
                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               NULL,
+                               Parent,
                                NULL);
 
     status = ZwOpenKey(Key,
@@ -111,6 +113,15 @@ RegistryOpenServiceKey(
 
 fail1:
     return status;
+}
+
+NTSTATUS
+RegistryOpenServiceKey(
+    IN  ACCESS_MASK     DesiredAccess,
+    OUT PHANDLE         Key
+    )
+{
+    return RegistryOpenKey(NULL, &RegistryPath, DesiredAccess, Key);
 }
 
 NTSTATUS
@@ -147,7 +158,6 @@ RegistryOpenHardwareKey(
     PKEY_NAME_INFORMATION   Info;
     PWCHAR                  Cursor;
     UNICODE_STRING          Unicode;
-    OBJECT_ATTRIBUTES       Attributes;
     NTSTATUS                status;
 
     status = IoOpenDeviceRegistryKey(DeviceObject,
@@ -191,15 +201,7 @@ RegistryOpenHardwareKey(
     
     RtlInitUnicodeString(&Unicode, Info->Name);
 
-    InitializeObjectAttributes(&Attributes,
-                               &Unicode,
-                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               NULL,
-                               NULL);
-
-    status = ZwOpenKey(Key,
-                       DesiredAccess,
-                       &Attributes);
+    status = RegistryOpenKey(NULL, &Unicode, DesiredAccess, Key);
     if (!NT_SUCCESS(status))
         goto fail5;
 
@@ -231,7 +233,6 @@ RegistryOpenSubKey(
 {
     ANSI_STRING         Ansi;
     UNICODE_STRING      Unicode;
-    OBJECT_ATTRIBUTES   Attributes;
     NTSTATUS            status;
 
     RtlInitAnsiString(&Ansi, Name);
@@ -240,15 +241,7 @@ RegistryOpenSubKey(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    InitializeObjectAttributes(&Attributes,
-                               &Unicode,
-                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               Key,
-                               NULL);
-
-    status = ZwOpenKey(SubKey,
-                       DesiredAccess,
-                       &Attributes);
+    status = RegistryOpenKey(Key, &Unicode, DesiredAccess, SubKey);
     if (!NT_SUCCESS(status))
         goto fail2;
 
@@ -318,7 +311,6 @@ RegistryDeleteSubKey(
 {
     ANSI_STRING         Ansi;
     UNICODE_STRING      Unicode;
-    OBJECT_ATTRIBUTES   Attributes;
     HANDLE              SubKey;
     NTSTATUS            status;
 
@@ -328,15 +320,7 @@ RegistryDeleteSubKey(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    InitializeObjectAttributes(&Attributes,
-                               &Unicode,
-                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               Key,
-                               NULL);
-
-    status = ZwOpenKey(&SubKey,
-                       KEY_ALL_ACCESS,
-                       &Attributes);
+    status = RegistryOpenKey(Key, &Unicode, KEY_ALL_ACCESS, &SubKey);
     if (!NT_SUCCESS(status))
         goto fail2;
 
@@ -863,103 +847,70 @@ RegistryQuerySystemStartOption(
     )
 {
     UNICODE_STRING                  Unicode;
-    OBJECT_ATTRIBUTES               Attributes;
     HANDLE                          Key;
-    PKEY_VALUE_PARTIAL_INFORMATION  Partial;
-    ULONG                           Size;
-    ANSI_STRING                     Ansi;
-    PWCHAR                          Option;
-    PWCHAR                          Context;
+    PANSI_STRING                    Ansi;
+    ULONG                           Length;
+    PCHAR                           Option;
+    PCHAR                           Context;
     NTSTATUS                        status;
 
     RtlInitUnicodeString(&Unicode, L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control");
     
-    InitializeObjectAttributes(&Attributes,
-                               &Unicode,
-                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                               NULL,
-                               NULL);
-
-    status = ZwOpenKey(&Key,
-                       KEY_READ,
-                       &Attributes);
+    status = RegistryOpenKey(NULL, &Unicode, KEY_READ, &Key);
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    RtlInitUnicodeString(&Unicode, L"SystemStartOptions");
-
-    status = ZwQueryValueKey(Key,
-                             &Unicode,
-                             KeyValuePartialInformation,
-                             NULL,
-                             0,
-                             &Size);
-    if (status != STATUS_BUFFER_TOO_SMALL)
+    status = RegistryQuerySzValue(Key, "SystemStartOptions", &Ansi);
+    if (!NT_SUCCESS(status))
         goto fail2;
-
-    Partial = __RegistryAllocate(Size);
-
-    status = STATUS_NO_MEMORY;
-    if (Partial == NULL)
-        goto fail3;
-
-    status = ZwQueryValueKey(Key,
-                             &Unicode,
-                             KeyValuePartialInformation,
-                             Partial,
-                             Size,
-                             &Size);
-    if (!NT_SUCCESS(status))
-        goto fail4;
-
-    status = STATUS_INVALID_PARAMETER;
-    if (Partial->Type != REG_SZ)
-        goto fail5;
-
-    RtlInitAnsiString(&Ansi, Prefix);
-
-    status = RtlAnsiStringToUnicodeString(&Unicode, &Ansi, TRUE);
-    if (!NT_SUCCESS(status))
-        goto fail6;
 
     // SystemStartOptions is a space separated list of options.
     // Scan it looking for the one we want.
-    Option = __wcstok_r((PWCHAR)Partial->Data, L" ", &Context);
-    if (wcsncmp(Option, Unicode.Buffer, Unicode.Length / sizeof (WCHAR)) == 0)
+    Length = (ULONG)strlen(Prefix);
+
+    Option = __strtok_r(Ansi[0].Buffer, " ", &Context);
+    if (strncmp(Prefix, Option, Length) == 0)
         goto found;
 
-    while ((Option = __wcstok_r(NULL, L" ", &Context)) != NULL)
-        if (wcsncmp(Option, Unicode.Buffer, Unicode.Length / sizeof (WCHAR)) == 0)
+    while ((Option = __strtok_r(NULL, " ", &Context)) != NULL)
+        if (strncmp(Prefix, Option, Length) == 0)
             goto found;
 
     status = STATUS_OBJECT_NAME_NOT_FOUND;
-    goto fail7;
+    goto fail3;
 
 found:
-    *Value = RegistrySzToAnsi(Option);
+    *Value = __RegistryAllocate(sizeof (ANSI_STRING) * 2);
 
     status = STATUS_NO_MEMORY;
     if (*Value == NULL)
-        goto fail8;
+        goto fail4;
 
-    __RegistryFree(Partial);
+    Length = (ULONG)strlen(Option);
+    (*Value)[0].MaximumLength = (USHORT)(Length + 1) * sizeof (CHAR);
+    (*Value)[0].Buffer = __RegistryAllocate((*Value)[0].MaximumLength);
 
-    RtlFreeUnicodeString(&Unicode);
+    status = STATUS_NO_MEMORY;
+    if ((*Value)[0].Buffer == NULL)
+        goto fail5;
+
+    RtlCopyMemory((*Value)[0].Buffer, Option, Length * sizeof (CHAR));
+
+    (*Value)[0].Length = (USHORT)Length * sizeof (CHAR);
+
+    RegistryFreeSzValue(Ansi);
 
     ZwClose(Key);
 
     return STATUS_SUCCESS;
 
-fail8:
-fail7:
-    RtlFreeUnicodeString(&Unicode);
-
-fail6:
 fail5:
-fail4:
-    __RegistryFree(Partial);
+    __RegistryFree(*Value);
 
+fail4:
 fail3:
+    RegistryFreeSzValue(Ansi);
+
 fail2:
     ZwClose(Key);
 
