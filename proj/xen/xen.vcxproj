@@ -75,6 +75,7 @@
 		<FilesToPackage Include="@(Inf->'%(CopyOutput)')" Condition="'@(Inf)'!=''" />
 	</ItemGroup>
 	<ItemGroup>
+		<ClCompile Include="..\..\src\common\registry.c" />
 		<ClCompile Include="..\..\src\xen\driver.c" />
 		<ClCompile Include="..\..\src\xen\event_channel.c" />
 		<ClCompile Include="..\..\src\xen\grant_table.c" />

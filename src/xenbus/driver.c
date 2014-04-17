@@ -391,10 +391,10 @@ DriverEntry(
 
     __DriverSetDriverObject(DriverObject);
 
+    Driver.DriverObject->DriverUnload = DriverUnload;
+
     if (*InitSafeBootMode > 0)
         goto done;
-
-    Driver.DriverObject->DriverUnload = DriverUnload;
 
     XenTouch();
 

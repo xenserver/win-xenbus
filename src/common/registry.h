@@ -45,6 +45,14 @@ RegistryTeardown(
     );
 
 extern NTSTATUS
+RegistryOpenKey(
+    IN  HANDLE          Parent,
+    IN  PUNICODE_STRING Path,
+    IN  ACCESS_MASK     DesiredAccess,
+    OUT PHANDLE         Key
+    );
+
+extern NTSTATUS
 RegistryOpenServiceKey(
     IN  ACCESS_MASK DesiredAccess,
     OUT PHANDLE     Key

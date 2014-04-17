@@ -36,6 +36,7 @@
 #include <xen.h>
 #include <util.h>
 
+#include "registry.h"
 #include "system.h"
 #include "dbg_print.h"
 #include "assert.h"
@@ -294,11 +295,57 @@ __SystemGetCpuInformation(
     Info("<====\n");
 }
 
+static FORCEINLINE VOID
+__SystemGetStartOptions(
+    VOID
+    )
+{
+    UNICODE_STRING  Unicode;
+    HANDLE          Key;
+    PANSI_STRING    Ansi;
+    NTSTATUS        status;
+
+    RtlInitUnicodeString(&Unicode, L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control");
+    
+    status = RegistryOpenKey(NULL, &Unicode, KEY_READ, &Key);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    status = RegistryQuerySzValue(Key, "SystemStartOptions", &Ansi);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = STATUS_UNSUCCESSFUL;
+    if (Ansi[0].Buffer == NULL)
+        goto fail3;
+
+    Info("%Z\n", Ansi);
+
+    RegistryFreeSzValue(Ansi);
+    RegistryCloseKey(Key);
+
+    return;
+
+fail3:
+    Error("fail3\n");
+
+    RegistryFreeSzValue(Ansi);
+
+fail2:
+    Error("fail2\n");
+
+    RegistryCloseKey(Key);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+}
+
 extern VOID
 SystemGetInformation(
     VOID
     )
 {
+    __SystemGetStartOptions();
     __SystemGetVersionInformation();
     __SystemGetMemoryInformation();
     __SystemGetCpuInformation();
