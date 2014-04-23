@@ -310,11 +310,6 @@ RangeSetGet(
         } while (Item < Range->Start);
 
         RangeSet->Cursor = Cursor;
-
-        if (Item == Range->Start && Item == Range->End) {   // Singleton
-            __RangeSetRemove(RangeSet, TRUE);
-            goto done;
-        }
     } else if (Item > Range->End) {
         do {
             Cursor = Cursor->Flink;
@@ -324,11 +319,14 @@ RangeSetGet(
         } while (Item > Range->End);
 
         RangeSet->Cursor = Cursor;
+    }
 
-        if (Item == Range->Start && Item == Range->End) {   // Singleton
-            __RangeSetRemove(RangeSet, FALSE);
-            goto done;
-        }
+    ASSERT3U(Item, >=, Range->Start);
+    ASSERT3U(Item, <=, Range->End);
+
+    if (Item == Range->Start && Item == Range->End) {   // Singleton
+        __RangeSetRemove(RangeSet, TRUE);
+        goto done;
     }
 
     ASSERT3U(Range->End, >, Range->Start);
