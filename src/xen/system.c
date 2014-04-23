@@ -42,11 +42,18 @@
 #include "assert.h"
 
 typedef struct _SYSTEM_CPU {
+    ULONG   Index;
     CHAR    Manufacturer[13];
     UCHAR   ApicID;
 } SYSTEM_CPU, *PSYSTEM_CPU;
 
-static SYSTEM_CPU   SystemCpu[MAXIMUM_PROCESSORS];
+typedef struct _SYSTEM_CONTEXT {
+    LONG        References;
+    SYSTEM_CPU  Cpu[MAXIMUM_PROCESSORS];
+    PVOID       Handle;
+} SYSTEM_CONTEXT, *PSYSTEM_CONTEXT;
+
+static SYSTEM_CONTEXT   SystemContext;
 
 static FORCEINLINE const CHAR *
 __PlatformIdName(
@@ -123,20 +130,23 @@ __ProductTypeName(
 #undef  PRODUCT_TYPE_NAME
 }
 
-static FORCEINLINE
+static FORCEINLINE NTSTATUS
 __SystemGetVersionInformation(
     VOID
     )
 {
     RTL_OSVERSIONINFOEXW    VersionInformation;
     ULONG                   Bit;
+    NTSTATUS                status;
 
     ASSERT3U(KeGetCurrentIrql(), ==, PASSIVE_LEVEL);
 
     RtlZeroMemory(&VersionInformation, sizeof (RTL_OSVERSIONINFOEXW));
     VersionInformation.dwOSVersionInfoSize = sizeof (RTL_OSVERSIONINFOEXW);
 
-    RtlGetVersion((PRTL_OSVERSIONINFOW)&VersionInformation);
+    status = RtlGetVersion((PRTL_OSVERSIONINFOW)&VersionInformation);
+    if (!NT_SUCCESS(status))
+        goto fail1;
 
 #if defined(__i386__)
     Info("KERNEL: %d.%d (BUILD %d) PLATFORM %s\n",
@@ -172,17 +182,29 @@ __SystemGetVersionInformation(
     }
 
     Info("TYPE: %s\n", __ProductTypeName(VersionInformation.wProductType));
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
 }
 
-static FORCEINLINE
+static FORCEINLINE NTSTATUS
 __SystemGetMemoryInformation(
     VOID
     )
 {
     PHYSICAL_MEMORY_RANGE   *Range;
     ULONG                   Index;
+    NTSTATUS                status;
 
     Range = MmGetPhysicalMemoryRanges();
+
+    status = STATUS_UNSUCCESSFUL;
+    if (Range == NULL)
+        goto fail1;
 
     for (Index = 0;
          Range[Index].BaseAddress.QuadPart != 0 || Range[Index].NumberOfBytes.QuadPart != 0;
@@ -198,6 +220,15 @@ __SystemGetMemoryInformation(
              Start.HighPart, Start.LowPart,
              End.HighPart, End.LowPart);
     }
+
+    ExFreePool(Range);
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
 }
 
 KDEFERRED_ROUTINE   SystemCpuInformation;
@@ -210,28 +241,22 @@ SystemCpuInformation(
     IN  PVOID   Argument2
     )
 {
-    PKSPIN_LOCK     Lock = Argument1;
-    PKEVENT         Event = Argument2;
-    ULONG           Index;
-    PSYSTEM_CPU     Cpu;
-    ULONG           EBX;
-    ULONG           ECX;
-    ULONG           EDX;
+    PSYSTEM_CPU Cpu = Context;
+    PKSPIN_LOCK Lock = Argument1;
+    PKEVENT     Event = Argument2;
+    ULONG       EBX;
+    ULONG       ECX;
+    ULONG       EDX;
 
     UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Argument2);
 
+    ASSERT(Cpu != NULL);
     ASSERT(Lock != NULL);
     ASSERT(Event != NULL);
 
     KeAcquireSpinLockAtDpcLevel(Lock);
 
-    Index = KeGetCurrentProcessorNumber();
-
-    Info("====> (%u)\n", Index);
-
-    Cpu = &SystemCpu[Index];
+    Info("====> (%u)\n", Cpu->Index);
 
     __CpuId(0, NULL, &EBX, &ECX, &EDX);
 
@@ -247,55 +272,54 @@ SystemCpuInformation(
 
     Info("Local APIC ID: %02X\n", Cpu->ApicID);
 
-    Info("<==== (%u)\n", Index);
+    Info("<==== (%u)\n", Cpu->Index);
 
     KeReleaseSpinLockFromDpcLevel(Lock);
     KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
 }
-
-KDPC        SystemDpc[MAXIMUM_PROCESSORS];
-KEVENT      SystemEvent[MAXIMUM_PROCESSORS];
-KWAIT_BLOCK SystemWaitBlock[MAXIMUM_PROCESSORS];
 
 static FORCEINLINE VOID
 __SystemGetCpuInformation(
     VOID
     )
 {
-    KSPIN_LOCK      Lock;
-    PKEVENT         Event[MAXIMUM_PROCESSORS];
-    LONG            Index;
-
-    Info("====>\n");
+    PSYSTEM_CONTEXT     Context = &SystemContext;
+    static KSPIN_LOCK   Lock;
+    static KDPC         Dpc[MAXIMUM_PROCESSORS];
+    static KEVENT       Event[MAXIMUM_PROCESSORS];
+    PKEVENT             __Event[MAXIMUM_PROCESSORS];
+    static KWAIT_BLOCK  WaitBlock[MAXIMUM_PROCESSORS];
+    LONG                Index;
 
     KeInitializeSpinLock(&Lock);
 
     for (Index = 0; Index < KeNumberProcessors; Index++) {
-        PKDPC   Dpc = &SystemDpc[Index];
+        PSYSTEM_CPU Cpu = &Context->Cpu[Index];
 
-        KeInitializeDpc(Dpc, SystemCpuInformation, NULL);
-        KeSetTargetProcessorDpc(Dpc, (CCHAR)Index);
-        KeSetImportanceDpc(Dpc, HighImportance);
+        Cpu->Index = Index;
+        KeInitializeDpc(&Dpc[Index],
+                        SystemCpuInformation,
+                        Cpu);
+        KeSetTargetProcessorDpc(&Dpc[Index], (CCHAR)Index);
+        KeSetImportanceDpc(&Dpc[Index], HighImportance);
 
-        Event[Index] = &SystemEvent[Index];
-        KeInitializeEvent(Event[Index], NotificationEvent, FALSE);
+        __Event[Index] = &Event[Index];
+        KeInitializeEvent(__Event[Index], NotificationEvent, FALSE);
 
-        KeInsertQueueDpc(Dpc, &Lock, Event[Index]);
+        KeInsertQueueDpc(&Dpc[Index], &Lock, __Event[Index]);
     }
 
     (VOID) KeWaitForMultipleObjects(KeNumberProcessors,
-                                    Event,
+                                    __Event,
                                     WaitAll,
                                     Executive,
                                     KernelMode,
                                     FALSE,
                                     NULL,
-                                    SystemWaitBlock);
-
-    Info("<====\n");
+                                    WaitBlock);
 }
 
-static FORCEINLINE VOID
+static FORCEINLINE NTSTATUS
 __SystemGetStartOptions(
     VOID
     )
@@ -324,7 +348,7 @@ __SystemGetStartOptions(
     RegistryFreeSzValue(Ansi);
     RegistryCloseKey(Key);
 
-    return;
+    return STATUS_SUCCESS;
 
 fail3:
     Error("fail3\n");
@@ -338,15 +362,160 @@ fail2:
 
 fail1:
     Error("fail1 (%08x)\n", status);
+
+    return status;
 }
 
-extern VOID
-SystemGetInformation(
+static FORCEINLINE NTSTATUS
+__SystemRegisterCallback(
+    IN  PWCHAR              Name,
+    IN  PCALLBACK_FUNCTION  Function,
+    IN  PVOID               Argument,
+    OUT PVOID               *Handle
+    )
+{
+    UNICODE_STRING          Unicode;
+    OBJECT_ATTRIBUTES       Attributes;
+    PCALLBACK_OBJECT        Object;
+    NTSTATUS                status;
+    
+    RtlInitUnicodeString(&Unicode, Name);
+
+    InitializeObjectAttributes(&Attributes,
+                               &Unicode,
+                               OBJ_CASE_INSENSITIVE | OBJ_PERMANENT,
+                               NULL,
+                               NULL);
+
+    status = ExCreateCallback(&Object,
+                              &Attributes,
+                              FALSE,
+                              FALSE);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    *Handle = ExRegisterCallback(Object,
+                                 Function,
+                                 Argument);
+
+    status = STATUS_UNSUCCESSFUL;
+    if (*Handle == NULL)
+        goto fail2;
+
+    ObDereferenceObject(Object);
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    ObDereferenceObject(Object);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+static FORCEINLINE VOID
+__SystemDeregisterCallback(
+    IN  PVOID   Handle
+    )
+{
+    ExUnregisterCallback(Handle);
+}
+
+CALLBACK_FUNCTION   SystemPowerStateCallback;
+
+VOID
+SystemPowerStateCallback(
+    IN  PVOID   _Context,
+    IN  PVOID   Argument1,
+    IN  PVOID   Argument2
+    )
+{
+    ULONG_PTR   Type = (ULONG_PTR)Argument1;
+    ULONG_PTR   Value = (ULONG_PTR)Argument2;
+
+    UNREFERENCED_PARAMETER(_Context);
+
+    if (Type == PO_CB_SYSTEM_STATE_LOCK) {
+        if (Value)
+            Info("-> S0\n");
+        else
+            Info("<- S0\n");
+    }
+}
+
+extern NTSTATUS
+SystemInitialize(
     VOID
     )
 {
-    __SystemGetStartOptions();
-    __SystemGetVersionInformation();
-    __SystemGetMemoryInformation();
+    PSYSTEM_CONTEXT Context = &SystemContext;
+    LONG            References;
+    NTSTATUS        status;
+
+    References = InterlockedIncrement(&Context->References);
+
+    status = STATUS_OBJECTID_EXISTS;
+    if (References != 1)
+        goto fail1;
+
+    status = __SystemGetStartOptions();
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = __SystemGetVersionInformation();
+    if (!NT_SUCCESS(status))
+        goto fail3;
+
+    status = __SystemGetMemoryInformation();
+    if (!NT_SUCCESS(status))
+        goto fail4;
+
     __SystemGetCpuInformation();
+
+    status = __SystemRegisterCallback(L"\\Callback\\PowerState",
+                                      SystemPowerStateCallback,
+                                      NULL,
+                                      &Context->Handle);
+    if (!NT_SUCCESS(status))
+        goto fail5;
+
+    return STATUS_SUCCESS;
+
+fail5:
+    Error("fail5\n");
+
+fail4:
+    Error("fail4\n");
+
+fail3:
+    Error("fail3\n");
+
+fail2:
+    Error("fail2\n");
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+extern VOID
+SystemTeardown(
+    VOID
+    )
+{
+    PSYSTEM_CONTEXT Context = &SystemContext;
+
+    __SystemDeregisterCallback(Context->Handle);
+    Context->Handle = NULL;
+
+    RtlZeroMemory(Context->Cpu, sizeof (SYSTEM_CPU) * MAXIMUM_PROCESSORS);
+
+    (VOID) InterlockedDecrement(&Context->References);
+
+    ASSERT(IsZeroMemory(Context, sizeof (SYSTEM_CONTEXT)));
 }

@@ -35,8 +35,13 @@
 #include <ntddk.h>
 #include <xen.h>
 
+extern NTSTATUS
+SystemInitialize(
+    VOID
+    );
+
 extern VOID
-SystemGetInformation(
+SystemTeardown(
     VOID
     );
 
