@@ -441,7 +441,7 @@ PoolDpc(
     UNREFERENCED_PARAMETER(Argument1);
     UNREFERENCED_PARAMETER(Argument2);
 
-    ASSERT(Pool);
+    ASSERT(Pool != NULL);
 
     InitializeListHead(&List);
 

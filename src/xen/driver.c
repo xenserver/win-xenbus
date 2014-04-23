@@ -123,43 +123,50 @@ DllInitialize(
          MONTH,
          YEAR);
 
-    SystemGetInformation();
-
-    status = HypercallInitialize();
+    status = SystemInitialize();
     if (!NT_SUCCESS(status))
         goto fail2;
 
-    status = BugCheckInitialize();
+    status = HypercallInitialize();
     if (!NT_SUCCESS(status))
         goto fail3;
 
-    status = ModuleInitialize();
+    status = BugCheckInitialize();
     if (!NT_SUCCESS(status))
         goto fail4;
 
-    status = ProcessInitialize();
+    status = ModuleInitialize();
     if (!NT_SUCCESS(status))
         goto fail5;
+
+    status = ProcessInitialize();
+    if (!NT_SUCCESS(status))
+        goto fail6;
 
 done:
     Trace("<====\n");
 
     return STATUS_SUCCESS;
 
+fail6:
+    Error("fail6\n");
+
+    ModuleTeardown();
+
 fail5:
     Error("fail5\n");
 
-    ModuleTeardown();
+    BugCheckTeardown();
 
 fail4:
     Error("fail4\n");
 
-    BugCheckTeardown();
+    HypercallTeardown();
 
 fail3:
     Error("fail3\n");
 
-    HypercallTeardown();
+    SystemTeardown();
 
 fail2:
     Error("fail2\n");
@@ -197,6 +204,8 @@ DllUnload(
     BugCheckTeardown();
 
     HypercallTeardown();
+
+    SystemTeardown();
 
     LogRemoveDisposition(Driver.InfoDisposition);
     Driver.InfoDisposition = NULL;

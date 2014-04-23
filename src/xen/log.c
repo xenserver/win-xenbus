@@ -499,6 +499,8 @@ LogDebugPrint(
     KIRQL               Irql;
     ULONG               Index;
 
+    UNREFERENCED_PARAMETER(ComponentId);
+
     if (Ansi->Length == 0 || Ansi->Buffer == NULL)
         return;
 
