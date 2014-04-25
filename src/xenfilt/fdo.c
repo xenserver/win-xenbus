@@ -232,6 +232,51 @@ __FdoGetPhysicalDeviceObject(
     return Fdo->PhysicalDeviceObject;
 }
 
+
+static FORCEINLINE NTSTATUS
+__FdoSetWindowsPEPrefix(
+    IN  PXENFILT_FDO    Fdo
+    )
+{
+    HANDLE                  ServiceKey;
+    DWORD                   WindowsPEMode;
+    NTSTATUS                status;
+
+    status = RegistryOpenServiceKey(KEY_READ,
+                                    &ServiceKey);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    status = RegistryQueryDwordValue(ServiceKey,
+                                     "WindowsPEMode",
+                                     &WindowsPEMode);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = STATUS_UNSUCCESSFUL;
+
+    if (!WindowsPEMode)
+        goto fail3;
+
+    Fdo->Prefix[0]=0;
+    
+    RegistryCloseKey(ServiceKey);
+
+    return STATUS_SUCCESS;
+
+fail3:
+    Error("fail3\n");
+
+fail2:
+    Error("fail2\n");
+    RegistryCloseKey(ServiceKey);
+
+fail1:
+    Error("fail1\n");
+
+    return status;
+}
+
 static FORCEINLINE NTSTATUS
 __FdoSetPrefix(
     IN  PXENFILT_FDO        Fdo
@@ -1981,6 +2026,8 @@ FdoCreate(
     __FdoSetName(Fdo, Name);
 
     status = __FdoSetPrefix(Fdo);
+    if (!NT_SUCCESS(status))
+        status = __FdoSetWindowsPEPrefix(Fdo);
     if (!NT_SUCCESS(status))
         goto fail6;
 
