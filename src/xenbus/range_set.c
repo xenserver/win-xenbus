@@ -187,34 +187,43 @@ RangeSetIsEmpty(
     return IsListEmpty(&RangeSet->List);
 }
 
-ULONGLONG
+NTSTATUS
 RangeSetPop(
-    IN  PXENBUS_RANGE_SET   RangeSet
+    IN  PXENBUS_RANGE_SET   RangeSet,
+    OUT PULONGLONG          Item
     )
 {
     PLIST_ENTRY             Cursor;
     PRANGE                  Range;
-    ULONGLONG               Item;
+    NTSTATUS                status;
 
     // Start at the head of the list
     Cursor = RangeSet->Cursor = RangeSet->List.Flink;
-    ASSERT(Cursor != &RangeSet->List);
+
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    if (Cursor == &RangeSet->List)
+        goto fail1;
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
 
-    Item = Range->Start;
+    *Item = Range->Start;
 
-    if (Item == Range->End) { // Singleton
+    if (*Item == Range->End) { // Singleton
         __RangeSetRemove(RangeSet, TRUE);
     } else {
-        Range->Start = Item + 1;
+        Range->Start = *Item + 1;
     }
 
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
 #endif
 
-    return Item;
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
 }
 
 static FORCEINLINE NTSTATUS

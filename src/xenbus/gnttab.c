@@ -136,6 +136,7 @@ GnttabDescriptorCtor(
 {
     PXENBUS_GNTTAB_CONTEXT      Context = Argument;
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
+    ULONGLONG                   Reference;
     NTSTATUS                    status;
 
     if (!RangeSetIsEmpty(Context->RangeSet))
@@ -146,9 +147,16 @@ GnttabDescriptorCtor(
         goto fail1;
 
 done:
-    Descriptor->Reference = (ULONG)RangeSetPop(Context->RangeSet);
+    status = RangeSetPop(Context->RangeSet, &Reference);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    Descriptor->Reference = (ULONG)Reference;
 
     return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
 
 fail1:
     Error("fail1 (%08x)\n", status);

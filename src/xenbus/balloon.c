@@ -414,8 +414,15 @@ __BalloonPopulatePfnArray(
 
     KeQuerySystemTime(&Start);
 
-    for (Index = 0; Index < Requested; Index++)
-        Balloon->PfnArray[Index] = (PFN_NUMBER)RangeSetPop(Balloon->RangeSet);
+    for (Index = 0; Index < Requested; Index++) {
+        ULONGLONG   Pfn;
+        NTSTATUS    status;
+
+        status = RangeSetPop(Balloon->RangeSet, &Pfn);
+        ASSERT(NT_SUCCESS(status));
+
+        Balloon->PfnArray[Index] = (PFN_NUMBER)Pfn;
+    }
 
     Count = __BalloonPopulatePhysmap(Requested, Balloon->PfnArray);
 
