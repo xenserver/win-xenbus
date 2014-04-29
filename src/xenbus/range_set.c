@@ -37,19 +37,22 @@
 #include "dbg_print.h"
 #include "assert.h"
 
-#define RANGE_SET_AUDIT DBG
+//#define RANGE_SET_AUDIT DBG
+#define RANGE_SET_AUDIT 1
 
 #define RANGE_SET_TAG   'GNAR'
 
 typedef struct _RANGE {
     LIST_ENTRY  ListEntry;
-    ULONGLONG   Start;
-    ULONGLONG   End;
+    LONGLONG    Start;
+    LONGLONG    End;
 } RANGE, *PRANGE;
 
 struct _XENBUS_RANGE_SET {
+    KSPIN_LOCK      Lock;
     LIST_ENTRY      List;
     PLIST_ENTRY     Cursor;
+    ULONGLONG       Count;
     PRANGE          Spare;
 };
 
@@ -69,19 +72,45 @@ __RangeSetFree(
     __FreePoolWithTag(Buffer, RANGE_SET_TAG);
 }
 
+static FORCEINLINE BOOLEAN
+__RangeSetIsEmpty(
+    IN  PXENBUS_RANGE_SET   RangeSet
+    )
+{
+    return IsListEmpty(&RangeSet->List);
+}
+
+BOOLEAN
+RangeSetIsEmpty(
+    IN  PXENBUS_RANGE_SET   RangeSet
+    )
+{
+    BOOLEAN                 IsEmpty;
+    KIRQL                   Irql;
+
+    KeAcquireSpinLock(&RangeSet->Lock, &Irql);
+    IsEmpty = __RangeSetIsEmpty(RangeSet);
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
+
+    return IsEmpty;
+}
+
 #if RANGE_SET_AUDIT
 static FORCEINLINE VOID
 __RangeSetAudit(
     IN  PXENBUS_RANGE_SET   RangeSet
     )
 {
-    if (IsListEmpty(&RangeSet->List)) {
+    if (__RangeSetIsEmpty(RangeSet)) {
         ASSERT3P(RangeSet->Cursor, ==, &RangeSet->List);
+        ASSERT3U(RangeSet->Count, ==, 0);
     } else {
         BOOLEAN     FoundCursor;
+        ULONGLONG   Count;
         PLIST_ENTRY ListEntry;
 
         FoundCursor = FALSE;
+        Count = 0;
 
         for (ListEntry = RangeSet->List.Flink;
              ListEntry != &RangeSet->List;
@@ -93,17 +122,19 @@ __RangeSetAudit(
 
             Range = CONTAINING_RECORD(ListEntry, RANGE, ListEntry);
 
-            ASSERT3U(Range->Start, <=, Range->End);
+            ASSERT3S(Range->Start, <=, Range->End);
+            Count += Range->End + 1 - Range->Start;
 
             if (ListEntry->Flink != &RangeSet->List) {
                 PRANGE Next;
 
                 Next = CONTAINING_RECORD(ListEntry->Flink, RANGE, ListEntry);
 
-                ASSERT3U(Range->End, <, Next->Start - 1);
+                ASSERT3S(Range->End, <, Next->Start - 1);
             }
         }
 
+        ASSERT3U(Count, ==, RangeSet->Count);
         ASSERT(FoundCursor);
     }
 }
@@ -118,12 +149,17 @@ __RangeSetRemove(
     PLIST_ENTRY             Cursor;
     PRANGE                  Range;
 
+    ASSERT(!__RangeSetIsEmpty(RangeSet));
+
     Cursor = RangeSet->Cursor;
+    ASSERT(Cursor != &RangeSet->List);
+
     RangeSet->Cursor = (After) ? Cursor->Flink : Cursor->Blink;
 
     RemoveEntryList(Cursor);
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
+    ASSERT3S(Range->End, <, Range->Start);
 
     if (RangeSet->Spare == NULL) {
         RtlZeroMemory(Range, sizeof (RANGE));
@@ -143,6 +179,8 @@ __RangeSetMergeBackwards(
     PRANGE                  Previous;
 
     Cursor = RangeSet->Cursor;
+    ASSERT(Cursor != &RangeSet->List);
+
     if (Cursor->Blink == &RangeSet->List)
         return;
 
@@ -153,6 +191,7 @@ __RangeSetMergeBackwards(
         return;
 
     Previous->End = Range->End;
+    Range->Start = Range->End + 1; // Invalidate
     __RangeSetRemove(RangeSet, FALSE);
 }
 
@@ -166,6 +205,8 @@ __RangeSetMergeForwards(
     PRANGE                  Next;
 
     Cursor = RangeSet->Cursor;
+    ASSERT(Cursor != &RangeSet->List);
+
     if (Cursor->Flink == &RangeSet->List)
         return;
 
@@ -176,52 +217,50 @@ __RangeSetMergeForwards(
         return;
 
     Next->Start = Range->Start;
+    Range->End = Range->Start - 1;  // Invalidate
     __RangeSetRemove(RangeSet, TRUE);
-}
-
-BOOLEAN
-RangeSetIsEmpty(
-    IN  PXENBUS_RANGE_SET   RangeSet
-    )
-{
-    return IsListEmpty(&RangeSet->List);
 }
 
 NTSTATUS
 RangeSetPop(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    OUT PULONGLONG          Item
+    OUT PLONGLONG           Item
     )
 {
     PLIST_ENTRY             Cursor;
     PRANGE                  Range;
+    KIRQL                   Irql;
     NTSTATUS                status;
 
-    // Start at the head of the list
-    Cursor = RangeSet->Cursor = RangeSet->List.Flink;
+    KeAcquireSpinLock(&RangeSet->Lock, &Irql);
 
     status = STATUS_INSUFFICIENT_RESOURCES;
-    if (Cursor == &RangeSet->List)
+    if (__RangeSetIsEmpty(RangeSet))
         goto fail1;
+
+    Cursor = RangeSet->Cursor;
+    ASSERT(Cursor != &RangeSet->List);
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
 
-    *Item = Range->Start;
+    *Item = Range->Start++;
+    --RangeSet->Count;
 
-    if (*Item == Range->End) { // Singleton
+    if (*Item == Range->End)    // Singleton
         __RangeSetRemove(RangeSet, TRUE);
-    } else {
-        Range->Start = *Item + 1;
-    }
 
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
 #endif
 
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
+
     return STATUS_SUCCESS;
 
 fail1:
     Error("fail1 (%08x)\n", status);
+
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
 
     return status;
 }
@@ -229,8 +268,8 @@ fail1:
 static FORCEINLINE NTSTATUS
 __RangeSetAdd(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Start,
-    IN  ULONGLONG           End,
+    IN  LONGLONG            Start,
+    IN  LONGLONG            End,
     IN  BOOLEAN             After
     )
 {
@@ -298,12 +337,15 @@ fail1:
 NTSTATUS
 RangeSetGet(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Item
+    IN  LONGLONG            Item
     )
 {
     PLIST_ENTRY             Cursor;
     PRANGE                  Range;
+    KIRQL                   Irql;
     NTSTATUS                status;
+
+    KeAcquireSpinLock(&RangeSet->Lock, &Irql);
 
     Cursor = RangeSet->Cursor;
     ASSERT(Cursor != &RangeSet->List);
@@ -330,29 +372,30 @@ RangeSetGet(
         RangeSet->Cursor = Cursor;
     }
 
-    ASSERT3U(Item, >=, Range->Start);
-    ASSERT3U(Item, <=, Range->End);
+    ASSERT3S(Item, >=, Range->Start);
+    ASSERT3S(Item, <=, Range->End);
 
     if (Item == Range->Start && Item == Range->End) {   // Singleton
+        Range->Start = Item + 1;    // Invalidate
         __RangeSetRemove(RangeSet, TRUE);
         goto done;
     }
 
-    ASSERT3U(Range->End, >, Range->Start);
+    ASSERT3S(Range->End, >, Range->Start);
 
     if (Item == Range->Start) {
         Range->Start = Item + 1;
         goto done;
     }
 
-    ASSERT3U(Range->Start, <, Item);
+    ASSERT3S(Range->Start, <, Item);
 
     if (Item == Range->End) {
         Range->End = Item - 1;
         goto done;
     }
 
-    ASSERT3U(Item, <, Range->End);
+    ASSERT3S(Item, <, Range->End);
 
     // We need to split a range
     status = __RangeSetAdd(RangeSet, Item + 1, Range->End, TRUE);
@@ -362,9 +405,13 @@ RangeSetGet(
     Range->End = Item - 1;
 
 done:
+    --RangeSet->Count;
+
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
 #endif
+
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
 
     return STATUS_SUCCESS;
 
@@ -375,14 +422,16 @@ fail1:
     __RangeSetAudit(RangeSet);
 #endif
 
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
+
     return status;    
 }
 
 static FORCEINLINE NTSTATUS
 __RangeSetAddAfter(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Start,
-    IN  ULONGLONG           End
+    IN  LONGLONG            Start,
+    IN  LONGLONG            End
     )
 {
     PLIST_ENTRY             Cursor;
@@ -393,7 +442,7 @@ __RangeSetAddAfter(
     ASSERT(Cursor != &RangeSet->List);
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
-    ASSERT3U(Start, >, Range->End);
+    ASSERT3S(Start, >, Range->End);
 
     Cursor = Cursor->Flink;
     while (Cursor != &RangeSet->List) {
@@ -423,8 +472,8 @@ fail1:
 static FORCEINLINE NTSTATUS
 __RangeSetAddBefore(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Start,
-    IN  ULONGLONG           End
+    IN  LONGLONG            Start,
+    IN  LONGLONG            End
     )
 {
     PLIST_ENTRY             Cursor;
@@ -435,7 +484,7 @@ __RangeSetAddBefore(
     ASSERT(Cursor != &RangeSet->List);
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
-    ASSERT3U(End, <, Range->Start);
+    ASSERT3S(End, <, Range->Start);
 
     Cursor = Cursor->Blink;
     while (Cursor != &RangeSet->List) {
@@ -465,18 +514,21 @@ fail1:
 NTSTATUS
 RangeSetPut(
     IN  PXENBUS_RANGE_SET   RangeSet,
-    IN  ULONGLONG           Start,
-    IN  ULONGLONG           End
+    IN  LONGLONG            Start,
+    IN  LONGLONG            End
     )
 {
     PLIST_ENTRY             Cursor;
+    KIRQL                   Irql;
     NTSTATUS                status;
 
-    ASSERT3U(End, >=, Start);
+    ASSERT3S(End, >=, Start);
+
+    KeAcquireSpinLock(&RangeSet->Lock, &Irql);
 
     Cursor = RangeSet->Cursor;
 
-    if (Cursor == &RangeSet->List) {
+    if (__RangeSetIsEmpty(RangeSet)) {
         status = __RangeSetAdd(RangeSet, Start, End, TRUE);
     } else {
         PRANGE  Range;
@@ -486,14 +538,32 @@ RangeSetPut(
         if (Start > Range->End) {
             status = __RangeSetAddAfter(RangeSet, Start, End);
         } else {
-            ASSERT3U(End, <, Range->Start);
+            ASSERT3S(End, <, Range->Start);
             status = __RangeSetAddBefore(RangeSet, Start, End);
         }
     }
 
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    RangeSet->Count += End + 1 - Start;
+
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
 #endif
+
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
+
+    return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+#if RANGE_SET_AUDIT
+    __RangeSetAudit(RangeSet);
+#endif
+
+    KeReleaseSpinLock(&RangeSet->Lock, Irql);
 
     return status;
 }
@@ -511,6 +581,7 @@ RangeSetInitialize(
     if (*RangeSet == NULL)
         goto fail1;
 
+    KeInitializeSpinLock(&(*RangeSet)->Lock);
     InitializeListHead(&(*RangeSet)->List);
     (*RangeSet)->Cursor = &(*RangeSet)->List;
 
@@ -536,8 +607,9 @@ RangeSetTeardown(
         RangeSet->Spare = NULL;
     }
         
-    ASSERT(IsListEmpty(&RangeSet->List));
+    ASSERT(__RangeSetIsEmpty(RangeSet));
     RtlZeroMemory(&RangeSet->List, sizeof (LIST_ENTRY));
+    RtlZeroMemory(&RangeSet->Lock, sizeof (KSPIN_LOCK));
 
     RangeSet->Cursor = NULL;
 

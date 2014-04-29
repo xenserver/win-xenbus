@@ -136,7 +136,7 @@ GnttabDescriptorCtor(
 {
     PXENBUS_GNTTAB_CONTEXT      Context = Argument;
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
-    ULONGLONG                   Reference;
+    LONGLONG                    Reference;
     NTSTATUS                    status;
 
     if (!RangeSetIsEmpty(Context->RangeSet))
