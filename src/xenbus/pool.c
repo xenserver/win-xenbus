@@ -31,11 +31,18 @@
 
 #include <ntddk.h>
 #include <ntstrsafe.h>
+#include <stdlib.h>
 #include <util.h>
 
 #include "pool.h"
 #include "dbg_print.h"
 #include "assert.h"
+
+extern ULONG
+NTAPI
+RtlRandomEx (
+    __inout PULONG Seed
+    );
 
 #define POOL_POOL   'OBJE'
 
@@ -53,8 +60,16 @@ typedef struct _POOL_MAGAZINE {
     PVOID   Slot[MAXIMUM_SLOTS];
 } POOL_MAGAZINE, *PPOOL_MAGAZINE;
 
+typedef struct _POOL_FIST {
+    LONG    Defer;
+    ULONG   Probability;
+    ULONG   Seed;
+} POOL_FIST, *PPOOL_FIST;
+
+#define MAXNAMELEN  128
+
 struct _XENBUS_POOL {
-    const CHAR      *Name;
+    CHAR            Name[MAXNAMELEN];
     ULONG           Size;
     NTSTATUS        (*Ctor)(PVOID, PVOID);
     VOID            (*Dtor)(PVOID, PVOID);
@@ -68,8 +83,9 @@ struct _XENBUS_POOL {
     POOL_MAGAZINE   Magazine[MAXIMUM_PROCESSORS];
     LONG            Allocated;
     LONG            MaximumAllocated;
-    LONG            Count;
-    LONG            MinimumCount;
+    LONG            Population;
+    LONG            MinimumPopulation;
+    POOL_FIST       FIST;
 };
 
 static FORCEINLINE PVOID
@@ -116,22 +132,22 @@ __PoolGetShared(
     IN  BOOLEAN         Locked
     )
 {
-    LONG                Count;
+    LONG                Population;
     POBJECT_HEADER      Header;
     PVOID               Object;
     LONG                Allocated;
     NTSTATUS            status;
 
-    Count = InterlockedDecrement(&Pool->Count);
+    Population = InterlockedDecrement(&Pool->Population);
 
-    if (Count >= 0) {
+    if (Population >= 0) {
         PLIST_ENTRY     ListEntry;
 
         if (!Locked)
             Pool->AcquireLock(Pool->Argument);
 
-        if (Count < Pool->MinimumCount)
-            Pool->MinimumCount = Count;
+        if (Population < Pool->MinimumPopulation)
+            Pool->MinimumPopulation = Population;
 
         if (IsListEmpty(&Pool->GetList))
             __PoolSwizzle(Pool);
@@ -151,7 +167,7 @@ __PoolGetShared(
         goto done;
     }
 
-    (VOID) InterlockedIncrement(&Pool->Count);
+    (VOID) InterlockedIncrement(&Pool->Population);
 
     Header = __PoolAllocate(sizeof (OBJECT_HEADER) + Pool->Size);
 
@@ -229,7 +245,7 @@ __PoolPutShared(
 
     KeMemoryBarrier();
 
-    (VOID) InterlockedIncrement(&Pool->Count);
+    (VOID) InterlockedIncrement(&Pool->Population);
 }
 
 static FORCEINLINE PVOID
@@ -289,6 +305,20 @@ PoolGet(
     ULONG               Cpu;
     PVOID               Object;
 
+    if (Pool->FIST.Probability != 0) {
+        LONG    Defer;
+
+        Defer = InterlockedDecrement(&Pool->FIST.Defer);
+
+        if (Defer <= 0) {
+            ULONG   Random = RtlRandomEx(&Pool->FIST.Seed);
+            ULONG   Threshold = (MAXLONG / 100) * Pool->FIST.Probability;
+
+            if (Random < Threshold)
+                return NULL;
+        }
+    }
+
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
     Cpu = KeGetCurrentProcessorNumber();
 
@@ -322,18 +352,14 @@ PoolPut(
 
 VOID
 PoolGetStatistics(
-    IN  PXENBUS_POOL    Pool,
-    OUT PULONG          Allocated,
-    OUT PULONG          MaximumAllocated,
-    OUT PULONG          Count,
-    OUT PULONG          MinimumCount
+    IN  PXENBUS_POOL            Pool,
+    OUT PXENBUS_POOL_STATISTICS Statistics
     )
 {
-    *Allocated = Pool->Allocated;
-    *MaximumAllocated = Pool->MaximumAllocated;
-
-    *Count = Pool->Count;
-    *MinimumCount = Pool->MinimumCount;
+    Statistics->Allocated = Pool->Allocated;
+    Statistics->MaximumAllocated = Pool->MaximumAllocated;
+    Statistics->Population = Pool->Population;
+    Statistics->MinimumPopulation = Pool->MinimumPopulation;
 }
 
 static FORCEINLINE
@@ -357,21 +383,21 @@ __PoolTrimShared(
     IN OUT  PLIST_ENTRY     List
     )
 {
-    LONG                    Count;
+    LONG                    Population;
     LONG                    Excess;
 
-    Count = Pool->Count;
+    Population = Pool->Population;
 
     KeMemoryBarrier();
 
-    Excess = Pool->MinimumCount;
+    Excess = Pool->MinimumPopulation;
 
     while (Excess != 0) {
         PLIST_ENTRY     ListEntry;
 
-        Count = InterlockedDecrement(&Pool->Count);
-        if (Count < 0) {
-            Count = InterlockedIncrement(&Pool->Count);
+        Population = InterlockedDecrement(&Pool->Population);
+        if (Population < 0) {
+            Population = InterlockedIncrement(&Pool->Population);
             break;
         }
 
@@ -387,7 +413,7 @@ __PoolTrimShared(
         --Excess;
     }
 
-    Pool->MinimumCount = Count;
+    Pool->MinimumPopulation = Population;
 }
 
 static FORCEINLINE VOID
@@ -453,20 +479,83 @@ PoolDpc(
     ASSERT(IsListEmpty(&List));
 }
 
-NTSTATUS
-PoolInitialize(
-    IN  const CHAR      *Name,
-    IN  ULONG           Size,
-    IN  NTSTATUS        (*Ctor)(PVOID, PVOID),
-    IN  VOID            (*Dtor)(PVOID, PVOID),
-    IN  VOID            (*AcquireLock)(PVOID),
-    IN  VOID            (*ReleaseLock)(PVOID),
-    IN  PVOID           Argument,
-    OUT PXENBUS_POOL    *Pool
+static FORCEINLINE VOID
+__PoolSetupFIST(
+    IN  PXENBUS_POOL            Pool,
+    IN  PXENBUS_STORE_INTERFACE StoreInterface
     )
 {
-    LARGE_INTEGER       Timeout;
-    NTSTATUS            status;
+    CHAR                        Node[sizeof ("fist/pool/") + MAXNAMELEN];
+    PCHAR                       Buffer;
+    LARGE_INTEGER               Now;
+    NTSTATUS                    status;
+
+    status = RtlStringCbPrintfA(Node,
+                                sizeof (Node),
+                                "fist/pool/%s",
+                                Pool->Name);
+    ASSERT(NT_SUCCESS(status));
+
+    status = STORE(Read,
+                   StoreInterface,
+                   NULL,
+                   Node,
+                   "defer",
+                   &Buffer);
+    if (!NT_SUCCESS(status)) {
+        Pool->FIST.Defer = 0;
+    } else {
+        Pool->FIST.Defer = (ULONG)strtol(Buffer, NULL, 0);
+
+        STORE(Free,
+              StoreInterface,
+              Buffer);
+    }
+
+    status = STORE(Read,
+                   StoreInterface,
+                   NULL,
+                   Node,
+                   "probability",
+                   &Buffer);
+    if (!NT_SUCCESS(status)) {
+        Pool->FIST.Probability = 0;
+    } else {
+        Pool->FIST.Probability = (ULONG)strtol(Buffer, NULL, 0);
+
+        STORE(Free,
+              StoreInterface,
+              Buffer);
+    }
+
+    if (Pool->FIST.Probability > 100)
+        Pool->FIST.Probability = 100;
+
+    if (Pool->FIST.Probability != 0)
+        Info("%s: Defer = %d Probability = %d\n",
+             Pool->Name,
+             Pool->FIST.Defer,
+             Pool->FIST.Probability);
+
+    KeQuerySystemTime(&Now);
+    Pool->FIST.Seed = Now.LowPart;
+}
+
+NTSTATUS
+PoolInitialize(
+    IN  PXENBUS_STORE_INTERFACE StoreInterface,
+    IN  const CHAR              *Name,
+    IN  ULONG                   Size,
+    IN  NTSTATUS                (*Ctor)(PVOID, PVOID),
+    IN  VOID                    (*Dtor)(PVOID, PVOID),
+    IN  VOID                    (*AcquireLock)(PVOID),
+    IN  VOID                    (*ReleaseLock)(PVOID),
+    IN  PVOID                   Argument,
+    OUT PXENBUS_POOL            *Pool
+    )
+{
+    LARGE_INTEGER               Timeout;
+    NTSTATUS                    status;
 
     *Pool = __PoolAllocate(sizeof (XENBUS_POOL));
 
@@ -474,13 +563,21 @@ PoolInitialize(
     if (*Pool == NULL)
         goto fail1;
 
-    (*Pool)->Name = Name;
+    status = RtlStringCbPrintfA((*Pool)->Name,
+                                sizeof ((*Pool)->Name),
+                                "%s",
+                                Name);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
     (*Pool)->Size = Size;
     (*Pool)->Ctor = Ctor;
     (*Pool)->Dtor = Dtor;
     (*Pool)->AcquireLock = AcquireLock;
     (*Pool)->ReleaseLock = ReleaseLock;
     (*Pool)->Argument = Argument;
+
+    __PoolSetupFIST(*Pool, StoreInterface);
 
     InitializeListHead(&(*Pool)->GetList);
 
@@ -497,6 +594,14 @@ PoolInitialize(
                  &(*Pool)->Dpc);
 
     return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    RtlZeroMemory((*Pool)->Name, sizeof ((*Pool)->Name));
+    
+    ASSERT(IsZeroMemory(*Pool, sizeof (XENBUS_POOL)));
+    __PoolFree(*Pool);
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -521,15 +626,17 @@ PoolTeardown(
 
     __PoolFlushMagazines(Pool);
 
-    Pool->MinimumCount = Pool->Count;
+    Pool->MinimumPopulation = Pool->Population;
     __PoolTrimShared(Pool, &List);
     __PoolEmpty(Pool, &List);
 
-    ASSERT3U(Pool->Count, ==, 0);
+    ASSERT3U(Pool->Population, ==, 0);
     ASSERT3U(Pool->Allocated, ==, 0);
     Pool->MaximumAllocated = 0;
 
     RtlZeroMemory(&Pool->GetList, sizeof (LIST_ENTRY));
+
+    RtlZeroMemory(&Pool->FIST, sizeof (POOL_FIST));
 
     Pool->Argument = NULL;
     Pool->ReleaseLock = NULL;
@@ -537,7 +644,8 @@ PoolTeardown(
     Pool->Dtor = NULL;
     Pool->Ctor = NULL;
     Pool->Size = 0;
-    Pool->Name = NULL;
+
+    RtlZeroMemory(Pool->Name, sizeof (Pool->Name));
 
     ASSERT(IsZeroMemory(Pool, sizeof (XENBUS_POOL)));
     __PoolFree(Pool);
