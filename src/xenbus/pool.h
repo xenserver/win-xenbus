@@ -33,19 +33,21 @@
 #define _XENBUS_POOL_H
 
 #include <ntddk.h>
+#include <store_interface.h>
 
 typedef struct _XENBUS_POOL XENBUS_POOL, *PXENBUS_POOL;
 
 extern NTSTATUS
 PoolInitialize(
-    IN  const CHAR      *Name,
-    IN  ULONG           Size,
-    IN  NTSTATUS        (*Ctor)(PVOID, PVOID),
-    IN  VOID            (*Dtor)(PVOID, PVOID),
-    IN  VOID            (*AcquireLock)(PVOID),
-    IN  VOID            (*ReleaseLock)(PVOID),
-    IN  PVOID           Argument,
-    OUT PXENBUS_POOL    *Pool
+    IN  PXENBUS_STORE_INTERFACE StoreInterface,
+    IN  const CHAR              *Name,
+    IN  ULONG                   Size,
+    IN  NTSTATUS                (*Ctor)(PVOID, PVOID),
+    IN  VOID                    (*Dtor)(PVOID, PVOID),
+    IN  VOID                    (*AcquireLock)(PVOID),
+    IN  VOID                    (*ReleaseLock)(PVOID),
+    IN  PVOID                   Argument,
+    OUT PXENBUS_POOL            *Pool
     );
 
 extern VOID
@@ -66,13 +68,17 @@ PoolPut(
     IN  BOOLEAN         Locked
     );
 
+typedef struct _XENBUS_POOL_STATISTICS {
+    ULONG   Allocated;
+    ULONG   MaximumAllocated;
+    ULONG   Population;
+    ULONG   MinimumPopulation;
+} XENBUS_POOL_STATISTICS, *PXENBUS_POOL_STATISTICS;
+
 extern VOID
 PoolGetStatistics(
-    IN  PXENBUS_POOL    Pool,
-    OUT PULONG          Allocated,
-    OUT PULONG          MaximumAllocated,
-    OUT PULONG          Count,
-    OUT PULONG          MinimumCount
+    IN  PXENBUS_POOL            Pool,
+    OUT PXENBUS_POOL_STATISTICS Statistics
     );
 
 #endif  // _XENBUS_POOL_H

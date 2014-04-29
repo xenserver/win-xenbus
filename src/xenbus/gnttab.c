@@ -61,7 +61,10 @@ struct _XENBUS_GNTTAB_CONTEXT {
     grant_entry_v1_t            *Entry;
     KSPIN_LOCK                  Lock;
     PXENBUS_RANGE_SET           RangeSet;
+    ULONG                       Seed;
+    LONG                        GetFailed;
     PXENBUS_POOL                DescriptorPool;
+    PXENBUS_STORE_INTERFACE     StoreInterface;
     PXENBUS_SUSPEND_INTERFACE   SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK    SuspendCallbackEarly;
     PXENBUS_DEBUG_INTERFACE     DebugInterface;
@@ -230,7 +233,8 @@ __GnttabFill(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    status = PoolInitialize("GnttabDescriptor",
+    status = PoolInitialize(Context->StoreInterface,
+                            "gnttab",
                             sizeof (XENBUS_GNTTAB_DESCRIPTOR),
                             GnttabDescriptorCtor,
                             GnttabDescriptorDtor,
@@ -283,7 +287,14 @@ GnttabGet(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    return PoolGet(Context->DescriptorPool, FALSE);
+    PXENBUS_GNTTAB_DESCRIPTOR   Descriptor;
+
+    Descriptor = PoolGet(Context->DescriptorPool, FALSE);
+
+    if (Descriptor == NULL)
+        (VOID) InterlockedIncrement(&Context->GetFailed);
+
+    return Descriptor;
 }
 
 static VOID
@@ -486,10 +497,7 @@ GnttabDebugCallback(
     )
 {
     PXENBUS_GNTTAB_CONTEXT  Context = Argument;
-    ULONG                   Allocated;
-    ULONG                   MaximumAllocated;
-    ULONG                   Count;
-    ULONG                   MinimumCount;
+    XENBUS_POOL_STATISTICS  Statistics;
 
     UNREFERENCED_PARAMETER(Crashing);
 
@@ -506,24 +514,27 @@ GnttabDebugCallback(
           Context->FrameCount);
 
     PoolGetStatistics(Context->DescriptorPool,
-                      &Allocated,
-                      &MaximumAllocated,
-                      &Count,
-                      &MinimumCount);
+                      &Statistics);
 
     DEBUG(Printf,
           Context->DebugInterface,
           Context->DebugCallback,
           "DESCRIPTOR POOL: Allocated = %u (Maximum = %u)\n",
-          Allocated,
-          MaximumAllocated);
+          Statistics.Allocated,
+          Statistics.MaximumAllocated);
 
     DEBUG(Printf,
           Context->DebugInterface,
           Context->DebugCallback,
-          "DESCRIPTOR POOL: Count = %u (Minimum = %u)\n",
-          Count,
-          MinimumCount);
+          "DESCRIPTOR POOL: Population = %u (Minimum = %u)\n",
+          Statistics.Population,
+          Statistics.MinimumPopulation);
+
+    DEBUG(Printf,
+          Context->DebugInterface,
+          Context->DebugCallback,
+          "GetFailed = %u\n",
+          Context->GetFailed);
 }
                      
 NTSTATUS
@@ -566,6 +577,10 @@ GnttabInitialize(
     Info("grant_entry_v1_t *: %p\n", Context->Entry);
 
     KeInitializeSpinLock(&Context->Lock);
+
+    Context->StoreInterface = FdoGetStoreInterface(Fdo);
+
+    STORE(Acquire, Context->StoreInterface);
 
     __GnttabFill(Context);
 
@@ -621,6 +636,9 @@ fail3:
 
     __GnttabEmpty(Context);
 
+    STORE(Release, Context->StoreInterface);
+    Context->StoreInterface = NULL;
+
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
 
     Context->Entry = NULL;
@@ -670,6 +688,9 @@ GnttabTeardown(
     Context->SuspendInterface = NULL;
 
     __GnttabEmpty(Context);
+
+    STORE(Release, Context->StoreInterface);
+    Context->StoreInterface = NULL;
 
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
 
