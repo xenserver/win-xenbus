@@ -415,7 +415,7 @@ __BalloonPopulatePfnArray(
     KeQuerySystemTime(&Start);
 
     for (Index = 0; Index < Requested; Index++) {
-        ULONGLONG   Pfn;
+        LONGLONG    Pfn;
         NTSTATUS    status;
 
         status = RangeSetPop(Balloon->RangeSet, &Pfn);
@@ -431,8 +431,8 @@ __BalloonPopulatePfnArray(
         NTSTATUS    status;
 
         status = RangeSetPut(Balloon->RangeSet,
-                             (ULONGLONG)Balloon->PfnArray[Index],
-                             (ULONGLONG)Balloon->PfnArray[Index]);
+                             (LONGLONG)Balloon->PfnArray[Index],
+                             (LONGLONG)Balloon->PfnArray[Index]);
         ASSERT(NT_SUCCESS(status));
 
         Balloon->PfnArray[Index] = 0;
@@ -511,8 +511,8 @@ __BalloonReleasePfnArray(
         }
 
         status = RangeSetPut(Balloon->RangeSet,
-                             (ULONGLONG)Balloon->PfnArray[Index],
-                             (ULONGLONG)Balloon->PfnArray[Next]);
+                             (LONGLONG)Balloon->PfnArray[Index],
+                             (LONGLONG)Balloon->PfnArray[Next]);
         if (!NT_SUCCESS(status))
             break;
 
@@ -532,7 +532,7 @@ __BalloonReleasePfnArray(
     for (Index = Count; Index < Requested; Index++) {
         NTSTATUS    status;
 
-        status = RangeSetGet(Balloon->RangeSet, (ULONGLONG)Balloon->PfnArray[Index]);
+        status = RangeSetGet(Balloon->RangeSet, (LONGLONG)Balloon->PfnArray[Index]);
         ASSERT(NT_SUCCESS(status));
 
         Balloon->PfnArray[Index] = 0;
