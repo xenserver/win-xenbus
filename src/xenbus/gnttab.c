@@ -49,7 +49,10 @@
 // we also reserve 1 entry for the crash kernel
 #define GNTTAB_RESERVED_ENTRY_COUNT 9
 
+#define GNTTAB_DESCRIPTOR_MAGIC 'DTNG'
+
 struct _XENBUS_GNTTAB_DESCRIPTOR {
+    ULONG               Magic;
     ULONG               Reference;
     grant_entry_v1_t    Entry;
 };
@@ -96,8 +99,8 @@ __GnttabExpand(
 {
     ULONG                       FrameIndex;
     PFN_NUMBER                  Pfn;
-    ULONGLONG                   Start;
-    ULONGLONG                   End;
+    LONGLONG                    Start;
+    LONGLONG                    End;
     NTSTATUS                    status;
 
     FrameIndex = Context->FrameCount;
@@ -119,7 +122,7 @@ __GnttabExpand(
     Start = __max(GNTTAB_RESERVED_ENTRY_COUNT, FrameIndex * GNTTAB_ENTRY_PER_FRAME);
     End = (Context->FrameCount * GNTTAB_ENTRY_PER_FRAME) - 1;
 
-    Trace("adding refrences [%08llx - %08llx]\n", Start, End);
+    Info("adding refrences [%08llx - %08llx]\n", Start, End);
 
     RangeSetPut(Context->RangeSet, Start, End);
 
@@ -154,7 +157,11 @@ done:
     if (!NT_SUCCESS(status))
         goto fail2;
 
+    Descriptor->Magic = GNTTAB_DESCRIPTOR_MAGIC;
     Descriptor->Reference = (ULONG)Reference;
+
+    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
+    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
 
     return STATUS_SUCCESS;
 
@@ -177,9 +184,11 @@ GnttabDescriptorDtor(
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
     NTSTATUS                    status;
 
+    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
+
     status = RangeSetPut(Context->RangeSet,
-                         (ULONGLONG)Descriptor->Reference,
-                         (ULONGLONG)Descriptor->Reference);
+                         (LONGLONG)Descriptor->Reference,
+                         (LONGLONG)Descriptor->Reference);
     ASSERT(NT_SUCCESS(status));
 }
 
@@ -264,13 +273,13 @@ __GnttabEmpty(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    ULONGLONG                   Entry;
+    LONGLONG                    Entry;
 
     PoolTeardown(Context->DescriptorPool);
     Context->DescriptorPool = NULL;
 
     for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
-         Entry < Context->FrameCount * GNTTAB_ENTRY_PER_FRAME;
+         Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
          Entry++) {
         NTSTATUS    status;
 
@@ -293,6 +302,8 @@ GnttabGet(
 
     if (Descriptor == NULL)
         (VOID) InterlockedIncrement(&Context->GetFailed);
+    else
+        ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
 
     return Descriptor;
 }
@@ -303,6 +314,8 @@ GnttabPut(
     IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
     )
 {
+    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
+
     PoolPut(Context->DescriptorPool, Descriptor, FALSE);
 }
 
@@ -352,6 +365,10 @@ GnttabPermitForeignAccess(
     va_list                         Arguments;
     NTSTATUS                        status;
 
+    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
+    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
+    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
+
     va_start(Arguments, Type);
     switch (Type) {
     case GNTTAB_ENTRY_FULL_PAGE:
@@ -377,6 +394,10 @@ GnttabRevokeForeignAccess(
     volatile SHORT                  *Flags;
     ULONG                           Attempt;
     NTSTATUS                        status;
+
+    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
+    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
+    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
 
     Entry = &Context->Entry[Descriptor->Reference];
     Flags = (volatile SHORT *)&Entry->flags;
@@ -419,6 +440,10 @@ GnttabReference(
     )
 {
     UNREFERENCED_PARAMETER(Context);
+
+    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
+    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
+    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
 
     return (ULONG)Descriptor->Reference;
 }
