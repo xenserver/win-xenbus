@@ -72,7 +72,10 @@ typedef struct _EVTCHN_PARAMETERS {
 
 #pragma warning(pop)
 
+#define EVTCHN_DESCRIPTOR_MAGIC 'DTVE'
+
 struct _XENBUS_EVTCHN_DESCRIPTOR {
+    ULONG                               Magic;
     LIST_ENTRY                          ListEntry;
     PVOID                               Caller;
     PKSERVICE_ROUTINE                   Callback;
@@ -286,6 +289,8 @@ EvtchnOpen(
     if (Descriptor == NULL)
         goto fail1;
 
+    Descriptor->Magic = EVTCHN_DESCRIPTOR_MAGIC;
+
     (VOID) RtlCaptureStackBackTrace(1, 1, &Descriptor->Caller, NULL);    
 
     Descriptor->Type = Type;
@@ -321,6 +326,8 @@ EvtchnOpen(
 
     LocalPort = Descriptor->LocalPort;
 
+    ASSERT3U(LocalPort, <, sizeof (Context->Descriptor) / sizeof (Context->Descriptor[0]));
+
     (VOID) __AcquireInterruptLock(Context->InterruptObject);
 
     ASSERT3P(Context->Descriptor[LocalPort], ==, NULL);
@@ -343,6 +350,8 @@ fail2:
     Descriptor->Type = 0;
 
     Descriptor->Caller = NULL;
+
+    Descriptor->Magic = 0;
 
     ASSERT(IsZeroMemory(Descriptor, sizeof (XENBUS_EVTCHN_DESCRIPTOR)));
     __EvtchnFree(Descriptor);
@@ -367,6 +376,8 @@ EvtchnUnmask(
 {
     KIRQL                           Irql;
     BOOLEAN                         Pending;
+
+    ASSERT3U(Descriptor->Magic, ==, EVTCHN_DESCRIPTOR_MAGIC);
 
     if (!Locked)
         Irql = __AcquireInterruptLock(Context->InterruptObject);
@@ -428,6 +439,8 @@ EvtchnSend(
 
     UNREFERENCED_PARAMETER(Context);
 
+    ASSERT3U(Descriptor->Magic, ==, EVTCHN_DESCRIPTOR_MAGIC);
+
     // Make sure we don't suspend
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
 
@@ -471,6 +484,8 @@ EvtchnTrigger(
     KIRQL                           Irql;
     BOOLEAN                         DoneSomething;
 
+    ASSERT3U(Descriptor->Magic, ==, EVTCHN_DESCRIPTOR_MAGIC);
+
     Irql = __AcquireInterruptLock(Context->InterruptObject);
 
     if (Descriptor->Active) {
@@ -494,6 +509,8 @@ EvtchnClose(
 {
     KIRQL                           Irql;
 
+    ASSERT3U(Descriptor->Magic, ==, EVTCHN_DESCRIPTOR_MAGIC);
+
     Irql = __AcquireInterruptLock(Context->InterruptObject);
 
     RemoveEntryList(&Descriptor->ListEntry);
@@ -501,6 +518,8 @@ EvtchnClose(
 
     if (Descriptor->Active) {
         ULONG   LocalPort = Descriptor->LocalPort;
+
+        ASSERT3U(LocalPort, <, sizeof (Context->Descriptor) / sizeof (Context->Descriptor[0]));
 
         Descriptor->Active = FALSE;
 
@@ -527,6 +546,8 @@ EvtchnClose(
 
     Descriptor->Caller = NULL;
 
+    Descriptor->Magic = 0;
+
     ASSERT(IsZeroMemory(Descriptor, sizeof (XENBUS_EVTCHN_DESCRIPTOR)));
     __EvtchnFree(Descriptor);
 }
@@ -539,6 +560,7 @@ EvtchnPort(
 {
     UNREFERENCED_PARAMETER(Context);
 
+    ASSERT3U(Descriptor->Magic, ==, EVTCHN_DESCRIPTOR_MAGIC);
     ASSERT(Descriptor->Active);
 
     return Descriptor->LocalPort;
@@ -689,6 +711,8 @@ EvtchnSuspendCallbackEarly(
 
         if (Descriptor->Active) {
             ULONG   LocalPort = Descriptor->LocalPort;
+
+            ASSERT3U(LocalPort, <, sizeof (Context->Descriptor) / sizeof (Context->Descriptor[0]));
 
             Descriptor->Active = FALSE;
 
