@@ -37,8 +37,7 @@
 #include "dbg_print.h"
 #include "assert.h"
 
-//#define RANGE_SET_AUDIT DBG
-#define RANGE_SET_AUDIT 1
+#define RANGE_SET_AUDIT DBG
 
 #define RANGE_SET_TAG   'GNAR'
 
@@ -109,6 +108,9 @@ __RangeSetAudit(
         ULONGLONG   Count;
         PLIST_ENTRY ListEntry;
 
+        ASSERT3P(RangeSet->Cursor, !=, &RangeSet->List);
+        ASSERT3U(RangeSet->Count, !=, 0);
+
         FoundCursor = FALSE;
         Count = 0;
 
@@ -157,6 +159,9 @@ __RangeSetRemove(
     RangeSet->Cursor = (After) ? Cursor->Flink : Cursor->Blink;
 
     RemoveEntryList(Cursor);
+
+    if (RangeSet->Cursor == &RangeSet->List)
+        RangeSet->Cursor = (After) ? RangeSet->List.Flink : RangeSet->List.Blink;
 
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
     ASSERT3S(Range->End, <, Range->Start);
