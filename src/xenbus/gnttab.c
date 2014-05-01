@@ -231,6 +231,8 @@ GnttabReleaseLock(
     __GnttabReleaseLock(Context);
 }
 
+#define GNTTAB_RESERVATION  32
+
 static FORCEINLINE NTSTATUS
 __GnttabFill(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
@@ -245,6 +247,7 @@ __GnttabFill(
     status = PoolInitialize(Context->StoreInterface,
                             "gnttab",
                             sizeof (XENBUS_GNTTAB_DESCRIPTOR),
+                            GNTTAB_RESERVATION,
                             GnttabDescriptorCtor,
                             GnttabDescriptorDtor,
                             GnttabAcquireLock,

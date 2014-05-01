@@ -71,6 +71,7 @@ typedef struct _POOL_FIST {
 struct _XENBUS_POOL {
     CHAR            Name[MAXNAMELEN];
     ULONG           Size;
+    ULONG           Reservation;
     NTSTATUS        (*Ctor)(PVOID, PVOID);
     VOID            (*Dtor)(PVOID, PVOID);
     VOID            (*AcquireLock)(PVOID);
@@ -105,25 +106,79 @@ __PoolFree(
 }
 
 static FORCEINLINE VOID
+__PoolFill(
+    IN  PXENBUS_POOL    Pool,
+    IN  PLIST_ENTRY     List
+    )
+{
+    // Not really a doubly-linked list; it's actually a singly-linked
+    // list via the Flink field.
+    while (List != NULL) {
+        PLIST_ENTRY     Next;
+        POBJECT_HEADER  Header;
+
+        Next = List->Flink;
+        List->Flink = NULL;
+        ASSERT3P(List->Blink, ==, NULL);
+
+        Header = CONTAINING_RECORD(List, OBJECT_HEADER, ListEntry);
+        ASSERT3U(Header->Magic, ==, OBJECT_HEADER_MAGIC);
+
+        InsertTailList(&Pool->GetList, &Header->ListEntry);
+
+        List = Next;
+    }
+}
+
+static FORCEINLINE VOID
 __PoolSwizzle(
     IN  PXENBUS_POOL    Pool
     )
 {
-    PLIST_ENTRY         ListEntry;
+    PLIST_ENTRY         List;
 
-    ListEntry = InterlockedExchangePointer(&Pool->PutList, NULL);
+    List = InterlockedExchangePointer(&Pool->PutList, NULL);
 
-    while (ListEntry != NULL) {
-        PLIST_ENTRY Next;
+    __PoolFill(Pool, List);
+}
 
-        Next = ListEntry->Flink;
-        ListEntry->Flink = NULL;
-        ASSERT3P(ListEntry->Blink, ==, NULL);
+static FORCEINLINE NTSTATUS
+__PoolCreateObject(
+    IN  PXENBUS_POOL    Pool,
+    OUT POBJECT_HEADER  *Header
+    )
+{
+    PVOID               Object;
+    NTSTATUS            status;
 
-        InsertTailList(&Pool->GetList, ListEntry);
+    (*Header) = __PoolAllocate(sizeof (OBJECT_HEADER) + Pool->Size);
 
-        ListEntry = Next;
-    }
+    status = STATUS_NO_MEMORY;
+    if (*Header == NULL)
+        goto fail1;
+
+    (*Header)->Magic = OBJECT_HEADER_MAGIC;
+
+    Object = (*Header) + 1;
+
+    status = Pool->Ctor(Pool->Argument, Object);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    (*Header)->Magic = 0;
+
+    ASSERT(IsZeroMemory(*Header, sizeof (OBJECT_HEADER)));
+    __PoolFree(*Header);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;    
 }
 
 static FORCEINLINE PVOID
@@ -163,25 +218,14 @@ __PoolGetShared(
         Header = CONTAINING_RECORD(ListEntry, OBJECT_HEADER, ListEntry);
         ASSERT3U(Header->Magic, ==, OBJECT_HEADER_MAGIC);
 
-        Object = Header + 1;
         goto done;
     }
 
     (VOID) InterlockedIncrement(&Pool->Population);
 
-    Header = __PoolAllocate(sizeof (OBJECT_HEADER) + Pool->Size);
-
-    status = STATUS_NO_MEMORY;
-    if (Header == NULL)
-        goto fail1;
-
-    Header->Magic = OBJECT_HEADER_MAGIC;
-
-    Object = Header + 1;
-
-    status = Pool->Ctor(Pool->Argument, Object);
+    status = __PoolCreateObject(Pool, &Header);
     if (!NT_SUCCESS(status))
-        goto fail2;
+        goto fail1;
 
     Allocated = InterlockedIncrement(&Pool->Allocated);
 
@@ -197,15 +241,9 @@ __PoolGetShared(
     }
 
 done:
+    Object = Header + 1;
+
     return Object;
-
-fail2:
-    Error("fail2\n");
-
-    Header->Magic = 0;
-
-    ASSERT(IsZeroMemory(Header, sizeof (OBJECT_HEADER)));
-    __PoolFree(Header);
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -390,8 +428,8 @@ __PoolTrimShared(
 
     KeMemoryBarrier();
 
-    Excess = Pool->MinimumPopulation;
-
+    Excess = __min((LONG)Pool->MinimumPopulation - (LONG)Pool->Reservation, 0);
+    
     while (Excess != 0) {
         PLIST_ENTRY     ListEntry;
 
@@ -417,6 +455,24 @@ __PoolTrimShared(
 }
 
 static FORCEINLINE VOID
+__PoolDestroyObject(
+    IN  PXENBUS_POOL    Pool,
+    IN  POBJECT_HEADER  Header
+    )
+{
+    PVOID               Object;
+
+    Object = Header + 1;
+
+    Pool->Dtor(Pool->Argument, Object);
+
+    Header->Magic = 0;
+
+    ASSERT(IsZeroMemory(Header, sizeof (OBJECT_HEADER)));
+    __PoolFree(Header);
+}
+
+static FORCEINLINE VOID
 __PoolEmpty(
     IN      PXENBUS_POOL    Pool,
     IN OUT  PLIST_ENTRY     List
@@ -425,7 +481,6 @@ __PoolEmpty(
     while (!IsListEmpty(List)) {
         PLIST_ENTRY     ListEntry;
         POBJECT_HEADER  Header;
-        PVOID           Object;
 
         ListEntry = RemoveHeadList(List);
         RtlZeroMemory(ListEntry, sizeof (LIST_ENTRY));
@@ -433,14 +488,7 @@ __PoolEmpty(
         Header = CONTAINING_RECORD(ListEntry, OBJECT_HEADER, ListEntry);
         ASSERT3U(Header->Magic, ==, OBJECT_HEADER_MAGIC);
 
-        Object = Header + 1;
-
-        Pool->Dtor(Pool->Argument, Object);
-
-        Header->Magic = 0;
-
-        ASSERT(IsZeroMemory(Header, sizeof (OBJECT_HEADER)));
-        __PoolFree(Header);
+        __PoolDestroyObject(Pool, Header);
     }
 }
 
@@ -546,6 +594,7 @@ PoolInitialize(
     IN  PXENBUS_STORE_INTERFACE StoreInterface,
     IN  const CHAR              *Name,
     IN  ULONG                   Size,
+    IN  ULONG                   Reservation,
     IN  NTSTATUS                (*Ctor)(PVOID, PVOID),
     IN  VOID                    (*Dtor)(PVOID, PVOID),
     IN  VOID                    (*AcquireLock)(PVOID),
@@ -555,6 +604,7 @@ PoolInitialize(
     )
 {
     LARGE_INTEGER               Timeout;
+    LIST_ENTRY                  List;
     NTSTATUS                    status;
 
     *Pool = __PoolAllocate(sizeof (XENBUS_POOL));
@@ -581,6 +631,23 @@ PoolInitialize(
 
     InitializeListHead(&(*Pool)->GetList);
 
+    while (Reservation != 0) {
+        POBJECT_HEADER  Header;
+
+        status = __PoolCreateObject(*Pool, &Header);
+        if (!NT_SUCCESS(status))
+            goto fail3;
+
+        (VOID) InterlockedIncrement(&(*Pool)->Allocated);
+
+        InsertTailList(&(*Pool)->GetList, &Header->ListEntry);
+        (VOID) InterlockedIncrement(&(*Pool)->Population);
+
+        --Reservation;
+    }
+    (*Pool)->MaximumAllocated = (*Pool)->Allocated;
+    (*Pool)->Reservation = (*Pool)->Population;
+
     KeInitializeDpc(&(*Pool)->Dpc,
                     PoolDpc,
                     (*Pool));
@@ -594,6 +661,29 @@ PoolInitialize(
                  &(*Pool)->Dpc);
 
     return STATUS_SUCCESS;
+
+fail3:
+    Error("fail3\n");
+
+    InitializeListHead(&List);
+
+    (*Pool)->MinimumPopulation = (*Pool)->Population;
+    __PoolTrimShared(*Pool, &List);
+    __PoolEmpty(*Pool, &List);
+
+    ASSERT3U((*Pool)->Population, ==, 0);
+    ASSERT3U((*Pool)->Allocated, ==, 0);
+
+    RtlZeroMemory(&(*Pool)->GetList, sizeof (LIST_ENTRY));
+
+    RtlZeroMemory(&(*Pool)->FIST, sizeof (POOL_FIST));
+
+    (*Pool)->Argument = NULL;
+    (*Pool)->ReleaseLock = NULL;
+    (*Pool)->AcquireLock = NULL;
+    (*Pool)->Dtor = NULL;
+    (*Pool)->Ctor = NULL;
+    (*Pool)->Size = 0;
 
 fail2:
     Error("fail2\n");
@@ -622,6 +712,9 @@ PoolTeardown(
     RtlZeroMemory(&Pool->Timer, sizeof (KTIMER));
     RtlZeroMemory(&Pool->Dpc, sizeof (KDPC));
 
+    Pool->Reservation = 0;
+    Pool->MaximumAllocated = 0;
+
     InitializeListHead(&List);
 
     __PoolFlushMagazines(Pool);
@@ -632,7 +725,6 @@ PoolTeardown(
 
     ASSERT3U(Pool->Population, ==, 0);
     ASSERT3U(Pool->Allocated, ==, 0);
-    Pool->MaximumAllocated = 0;
 
     RtlZeroMemory(&Pool->GetList, sizeof (LIST_ENTRY));
 
