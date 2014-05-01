@@ -467,6 +467,7 @@ ModuleInitialize(
     if (BufferSize == 0)
         goto fail3;
 
+again:
     Count = BufferSize / sizeof (AUX_MODULE_EXTENDED_INFO);
     QueryInfo = __ModuleAllocate(sizeof (AUX_MODULE_EXTENDED_INFO) * Count);
 
@@ -477,8 +478,13 @@ ModuleInitialize(
     status = AuxKlibQueryModuleInformation(&BufferSize,
                                            sizeof (AUX_MODULE_EXTENDED_INFO),
                                            QueryInfo);
-    if (!NT_SUCCESS(status))
-        goto fail5;
+    if (!NT_SUCCESS(status)) {
+        if (status != STATUS_BUFFER_TOO_SMALL)
+            goto fail5;
+
+        __ModuleFree(QueryInfo);
+        goto again;
+    }
 
     InitializeListHead(&Context->List);
     Context->Cursor = &Context->List;
