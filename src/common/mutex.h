@@ -51,17 +51,48 @@ InitializeMutex(
     KeInitializeEvent(&Mutex->Event, SynchronizationEvent, TRUE);
 }
 
+static FORCEINLINE BOOLEAN
+__drv_maxIRQL(PASSIVE_LEVEL)
+TryAcquireMutex(
+    IN  PMUTEX      Mutex
+    )
+{
+    LARGE_INTEGER   Timeout;
+    NTSTATUS        status;
+
+    Timeout.QuadPart = 0;
+
+    status = KeWaitForSingleObject(&Mutex->Event,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   &Timeout);
+    if (status == STATUS_TIMEOUT)
+        return FALSE;
+
+    ASSERT(NT_SUCCESS(status));
+
+    ASSERT3P(Mutex->Owner, ==, NULL);
+    Mutex->Owner = KeGetCurrentThread();
+
+    return TRUE;
+}
+
 static FORCEINLINE VOID
 __drv_maxIRQL(PASSIVE_LEVEL)
 AcquireMutex(
     IN  PMUTEX  Mutex
     )
 {
-    (VOID) KeWaitForSingleObject(&Mutex->Event,
-                                 Executive,
-                                 KernelMode,
-                                 FALSE,
-                                 NULL);
+    NTSTATUS    status;
+
+    status = KeWaitForSingleObject(&Mutex->Event,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+
+    ASSERT(NT_SUCCESS(status));
 
     ASSERT3P(Mutex->Owner, ==, NULL);
     Mutex->Owner = KeGetCurrentThread();

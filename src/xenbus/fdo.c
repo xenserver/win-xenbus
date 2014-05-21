@@ -79,18 +79,22 @@ struct _XENBUS_FDO {
     CHAR                            VendorName[MAXNAMELEN];
     BOOLEAN                         Active;
 
+    MUTEX                           Mutex;
+    ULONG                           References;
+
     PXENBUS_THREAD                  ScanThread;
     KEVENT                          ScanEvent;
     PXENBUS_STORE_WATCH             ScanWatch;
-    MUTEX                           Mutex;
-    ULONG                           References;
+
     PXENBUS_THREAD                  SuspendThread;
     KEVENT                          SuspendEvent;
     PXENBUS_STORE_WATCH             SuspendWatch;
+
     PXENBUS_BALLOON                 Balloon;
     PXENBUS_THREAD                  BalloonThread;
     KEVENT                          BalloonEvent;
     PXENBUS_STORE_WATCH             BalloonWatch;
+    MUTEX                           BalloonSuspendMutex;
 
     XENBUS_RESOURCE                 Resource[RESOURCE_COUNT];
     PKINTERRUPT                     InterruptObject;
@@ -915,6 +919,7 @@ FdoScan(
                        &Buffer);
         if (NT_SUCCESS(status)) {
             StoreClasses = __FdoMultiSzToUpcaseAnsi(Buffer);
+
             STORE(Free,
                   &Fdo->StoreInterface,
                   Buffer);
@@ -1002,6 +1007,39 @@ loop:
     return STATUS_SUCCESS;
 }
 
+static FORCEINLINE NTSTATUS
+__FdoSuspendSetActive(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    if (!TryAcquireMutex(&Fdo->BalloonSuspendMutex))
+        goto fail1;
+
+    Trace("<===>\n");
+
+    return STATUS_SUCCESS;
+
+fail1:
+    return STATUS_UNSUCCESSFUL;
+}
+
+static FORCEINLINE VOID
+__FdoSuspendClearActive(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    ReleaseMutex(&Fdo->BalloonSuspendMutex);
+
+    Trace("<===>\n");
+
+    //
+    // We may have missed initiating a balloon
+    // whilst suspending/resuming.
+    //
+    if (Fdo->Balloon != NULL)
+        ThreadWake(Fdo->BalloonThread);
+}
+
 static NTSTATUS
 FdoSuspend(
     IN  PXENBUS_THREAD  Self,
@@ -1020,6 +1058,7 @@ FdoSuspend(
 
     for (;;) {
         PCHAR       Buffer;
+        BOOLEAN     Suspend;
         NTSTATUS    status;
 
         Trace("waiting...\n");
@@ -1047,22 +1086,34 @@ FdoSuspend(
                        "control",
                        "shutdown",
                        &Buffer);
+        if (NT_SUCCESS(status)) {
+            Suspend = (strcmp(Buffer, "suspend") == 0) ? TRUE : FALSE;
+                
+            STORE(Free,
+                  &Fdo->StoreInterface,
+                  Buffer);
+        } else {
+            Suspend = FALSE;
+        }
+
+        if (!Suspend) {
+            Trace("nothing to do\n");
+            goto loop;
+        }
+
+        status = __FdoSuspendSetActive(Fdo);
         if (!NT_SUCCESS(status))
             goto loop;
 
-        if (strcmp(Buffer, "suspend") == 0) {
-            (VOID) STORE(Remove,
-                         &Fdo->StoreInterface,
-                         NULL,
-                         "control",
-                         "shutdown");
+        (VOID) STORE(Remove,
+                     &Fdo->StoreInterface,
+                     NULL,
+                     "control",
+                     "shutdown");
 
-            SuspendTrigger(&Fdo->SuspendInterface);
-        }
+        SuspendTrigger(&Fdo->SuspendInterface);
 
-        STORE(Free,
-              &Fdo->StoreInterface,
-              Buffer);
+        __FdoSuspendClearActive(Fdo);
 
 loop:
         STORE(Release, &Fdo->StoreInterface);
@@ -1081,6 +1132,54 @@ loop:
 #define TIME_S(_s)              (TIME_MS((_s) * 1000))
 #define TIME_RELATIVE(_t)       (-(_t))
 
+static FORCEINLINE NTSTATUS
+__FdoBalloonSetActive(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    if (!TryAcquireMutex(&Fdo->BalloonSuspendMutex))
+        goto fail1;
+
+    Trace("<===>\n");
+
+    (VOID) STORE(Printf,
+                 &Fdo->StoreInterface,
+                 NULL,
+                 "control",
+                 "balloon-active",
+                 "%u",
+                 1);
+
+    return STATUS_SUCCESS;
+
+fail1:
+    return STATUS_UNSUCCESSFUL;
+}
+
+static FORCEINLINE VOID
+__FdoBalloonClearActive(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    (VOID) STORE(Printf,
+                 &Fdo->StoreInterface,
+                 NULL,
+                 "control",
+                 "balloon-active",
+                 "%u",
+                 0);
+
+    ReleaseMutex(&Fdo->BalloonSuspendMutex);
+
+    Trace("<===>\n");
+
+    //
+    // We may have missed initiating a suspend
+    // whilst the balloon was active.
+    //
+    ThreadWake(Fdo->SuspendThread);
+}
+
 static NTSTATUS
 FdoBalloon(
     IN  PXENBUS_THREAD  Self,
@@ -1089,34 +1188,77 @@ FdoBalloon(
 {
     PXENBUS_FDO         Fdo = Context;
     PKEVENT             Event;
+    LARGE_INTEGER       Timeout;
+    PCHAR               Buffer;
+    ULONGLONG           VideoRAM;
+    ULONGLONG           StaticMax;
     BOOLEAN             Active;
-    ULONGLONG           Maximum = 0;
     NTSTATUS            status;
 
     Trace("====>\n");
 
     Event = ThreadGetEvent(Self);
 
+    Timeout.QuadPart = TIME_RELATIVE(TIME_S(1));
+
+    STORE(Acquire, &Fdo->StoreInterface);
+
+    status = STORE(Read,
+                   &Fdo->StoreInterface,
+                   NULL,
+                   "memory",
+                   "static-max",
+                   &Buffer);
+    if (!NT_SUCCESS(status))
+        goto fail1;
+
+    StaticMax = _strtoui64(Buffer, NULL, 10);
+
+    STORE(Free,
+          &Fdo->StoreInterface,
+          Buffer);
+
+    status = STORE(Read,
+                   &Fdo->StoreInterface,
+                   NULL,
+                   "memory",
+                   "videoram",
+                   &Buffer);
+    if (NT_SUCCESS(status)) {
+        VideoRAM = _strtoui64(Buffer, NULL, 10);
+
+        STORE(Free,
+              &Fdo->StoreInterface,
+              Buffer);
+    } else {
+        VideoRAM = 0;
+    }
+
+    StaticMax -= VideoRAM;
+    StaticMax /= 4;   // We need the value in pages
+
+    STORE(Release, &Fdo->StoreInterface);
+
     Active = FALSE;
 
     for (;;) {
-        PCHAR       Buffer;
         ULONGLONG   Target;
+        ULONGLONG   Size;
         BOOLEAN     AllowInflation;
         BOOLEAN     AllowDeflation;
 
-        if (!Active) {
-            Trace("waiting...\n");
+        Trace("waiting%s...\n", (Active) ? " (Active)" : "");
 
-            (VOID) KeWaitForSingleObject(Event,
-                                         Executive,
-                                         KernelMode,
-                                         FALSE,
-                                         NULL);
-            KeClearEvent(Event);
-
-            Trace("awake\n");
-        }
+        (VOID) KeWaitForSingleObject(Event,
+                                     Executive,
+                                     KernelMode,
+                                     FALSE,
+                                     (Active) ?
+                                     &Timeout :
+                                     NULL);
+        KeClearEvent(Event);
+        
+        Trace("awake\n");
 
         if (ThreadIsAlerted(Self))
             break;
@@ -1125,45 +1267,6 @@ FdoBalloon(
 
         if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0)
             goto loop;
-
-        // Only sample this if it's zero as it should never change
-        // during the lifetime of the domain.
-        if (Maximum == 0) {
-            ULONGLONG   VideoRAM;
-
-            status = STORE(Read,
-                           &Fdo->StoreInterface,
-                           NULL,
-                           "memory",
-                           "static-max",
-                           &Buffer);
-            if (NT_SUCCESS(status)) {
-                Maximum = _strtoui64(Buffer, NULL, 10);
-                STORE(Free,
-                      &Fdo->StoreInterface,
-                      Buffer);
-            } else {
-                goto loop;
-            }
-
-            status = STORE(Read,
-                           &Fdo->StoreInterface,
-                           NULL,
-                           "memory",
-                           "videoram",
-                           &Buffer);
-            if (NT_SUCCESS(status)) {
-                VideoRAM = _strtoui64(Buffer, NULL, 10);
-                STORE(Free,
-                      &Fdo->StoreInterface,
-                      Buffer);
-            } else {
-                VideoRAM = 0;
-            }
-
-            Maximum -= VideoRAM;
-            Maximum /= 4;   // We need the value in pages
-        }
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -1175,16 +1278,28 @@ FdoBalloon(
             goto loop;
 
         Target = _strtoui64(Buffer, NULL, 10) / 4;
+
         STORE(Free,
               &Fdo->StoreInterface,
               Buffer);
 
-        if (Target > Maximum)
-            Target = Maximum;
+        if (Target > StaticMax)
+            Target = StaticMax;
 
-        Info("%s: Target = %llu page(s)\n",
-             __FdoGetName(Fdo),
-             Maximum - Target);
+        Size = StaticMax - Target;
+
+        if (BalloonGetSize(Fdo->Balloon) == Size) {
+            Trace("nothing to do\n");
+            goto loop;
+        }
+
+        if (!Active) {
+            status = __FdoBalloonSetActive(Fdo);
+            if (!NT_SUCCESS(status))
+                goto loop;
+
+            Active = TRUE;
+        }
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -1194,6 +1309,7 @@ FdoBalloon(
                        &Buffer);
         if (NT_SUCCESS(status)) {
             AllowInflation = !strtol(Buffer, NULL, 2);
+
             STORE(Free,
                   &Fdo->StoreInterface,
                   Buffer);
@@ -1212,6 +1328,7 @@ FdoBalloon(
                        &Buffer);
         if (NT_SUCCESS(status)) {
             AllowDeflation = !strtol(Buffer, NULL, 2);
+
             STORE(Free,
                   &Fdo->StoreInterface,
                   Buffer);
@@ -1222,33 +1339,17 @@ FdoBalloon(
         if (!AllowDeflation)
             Warning("deflation disallowed\n");
 
-        Active = TRUE;
-        (VOID) STORE(Printf,
-                     &Fdo->StoreInterface,
-                     NULL,
-                     "control",
-                     "balloon-active",
-                     "%u",
-                     1);
-
-        if (!BalloonAdjust(Fdo->Balloon,
-                           Maximum - Target,
-                           AllowInflation,
-                           AllowDeflation)) {
-            LARGE_INTEGER   Timeout;
-
-            Timeout.QuadPart = TIME_RELATIVE(TIME_S(1));
-
-            KeDelayExecutionThread(KernelMode, FALSE, &Timeout);
+        status = BalloonAdjust(Fdo->Balloon,
+                               Size,
+                               AllowInflation,
+                               AllowDeflation);
+        if (!NT_SUCCESS(status))
             goto loop;
-        }
 
+        ASSERT(Active);
         Active = FALSE;
-        (VOID) STORE(Remove,
-                     &Fdo->StoreInterface,
-                     NULL,
-                     "control",
-                     "balloon-active");
+
+        __FdoBalloonClearActive(Fdo);
 
 loop:
         STORE(Release, &Fdo->StoreInterface);
@@ -1263,6 +1364,11 @@ loop:
 
     Trace("<====\n");
     return STATUS_SUCCESS;
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
 }
 
 static DECLSPEC_NOINLINE VOID
@@ -2083,6 +2189,8 @@ FdoStartDevice(
     if (!NT_SUCCESS(status))
         goto fail3;
 
+    InitializeMutex(&Fdo->BalloonSuspendMutex);
+
     KeInitializeEvent(&Fdo->SuspendEvent, NotificationEvent, FALSE);
 
     status = ThreadCreate(FdoSuspend, Fdo, &Fdo->SuspendThread);
@@ -2181,6 +2289,8 @@ fail4:
     Error("fail4\n");
 
     RtlZeroMemory(&Fdo->SuspendEvent, sizeof (KEVENT));
+
+    RtlZeroMemory(&Fdo->BalloonSuspendMutex, sizeof (MUTEX));
 
     ThreadAlert(Fdo->ScanThread);
     ThreadJoin(Fdo->ScanThread);
@@ -2287,6 +2397,8 @@ FdoStopDevice(
     Fdo->SuspendThread = NULL;
 
     RtlZeroMemory(&Fdo->SuspendEvent, sizeof (KEVENT));
+
+    RtlZeroMemory(&Fdo->BalloonSuspendMutex, sizeof (MUTEX));
 
     ThreadAlert(Fdo->ScanThread);
     ThreadJoin(Fdo->ScanThread);
@@ -2463,6 +2575,8 @@ FdoRemoveDevice(
     Fdo->SuspendThread = NULL;
 
     RtlZeroMemory(&Fdo->SuspendEvent, sizeof (KEVENT));
+
+    RtlZeroMemory(&Fdo->BalloonSuspendMutex, sizeof (MUTEX));
 
     ThreadAlert(Fdo->ScanThread);
     ThreadJoin(Fdo->ScanThread);
