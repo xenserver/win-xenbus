@@ -42,6 +42,7 @@ PoolInitialize(
     IN  PXENBUS_STORE_INTERFACE StoreInterface,
     IN  const CHAR              *Name,
     IN  ULONG                   Size,
+    IN  ULONG                   Reservation,
     IN  NTSTATUS                (*Ctor)(PVOID, PVOID),
     IN  VOID                    (*Dtor)(PVOID, PVOID),
     IN  VOID                    (*AcquireLock)(PVOID),
