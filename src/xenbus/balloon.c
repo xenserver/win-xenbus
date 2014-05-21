@@ -316,7 +316,7 @@ done:
     MmFreePagesFromMdl(Mdl);
 }
 
-#define MIN_PAGES_PER_S 10000ull
+#define MIN_PAGES_PER_S 1000ull
 
 static FORCEINLINE ULONG
 __BalloonAllocatePfnArray(
@@ -738,10 +738,10 @@ __BalloonLowMemory(
     return (status == STATUS_SUCCESS) ? TRUE : FALSE;
 }
 
-BOOLEAN
+NTSTATUS
 BalloonAdjust(
     IN  PXENBUS_BALLOON Balloon,
-    IN  ULONGLONG       Target,
+    IN  ULONGLONG       Size,
     IN  BOOLEAN         AllowInflation,
     IN  BOOLEAN         AllowDeflation
     )
@@ -756,21 +756,20 @@ BalloonAdjust(
 
     AcquireMutex(&Balloon->Mutex);
 
-    for (;;) {
-        if (Target > Balloon->Size)
-            Abort = !AllowInflation || __BalloonLowMemory(Balloon) || BalloonInflate(Balloon, Target - Balloon->Size);
-        else if (Target < Balloon->Size)
-            Abort = !AllowDeflation || BalloonDeflate(Balloon, Balloon->Size - Target);
-
-        if (Target == Balloon->Size || Abort)
-            break;
+    while (Balloon->Size != Size && !Abort) {
+        if (Size > Balloon->Size)
+            Abort = !AllowInflation || __BalloonLowMemory(Balloon) || BalloonInflate(Balloon, Size - Balloon->Size);
+        else if (Size < Balloon->Size)
+            Abort = !AllowDeflation || BalloonDeflate(Balloon, Balloon->Size - Size);
     }
 
     ReleaseMutex(&Balloon->Mutex);
 
-    Info("<==== (%llu page(s))\n", Balloon->Size);
+    Info("<==== (%llu page(s))%s\n",
+        Balloon->Size,
+        (Abort) ? " [ABORTED]" : "");
 
-    return !Abort;
+    return (Abort) ? STATUS_RETRY : STATUS_SUCCESS;
 }
 
 ULONGLONG

@@ -36,7 +36,7 @@
 
 typedef struct _XENBUS_BALLOON XENBUS_BALLOON, *PXENBUS_BALLOON;
 
-extern BOOLEAN
+extern NTSTATUS
 BalloonAdjust(
     IN  PXENBUS_BALLOON Balloon,
     IN  ULONGLONG       Target,
