@@ -877,7 +877,7 @@ FdoScan(
     HANDLE              ParametersKey;
     NTSTATUS            status;
 
-    Trace("====>\n");
+    Info("====>\n");
 
     Event = ThreadGetEvent(Self);
 
@@ -906,10 +906,13 @@ FdoScan(
         if (ThreadIsAlerted(Self))
             break;
 
-        STORE(Acquire, &Fdo->StoreInterface);
+        // It is not safe to use interfaces before this point
+        if (__FdoGetDevicePnpState(Fdo) != Started) {
+            KeSetEvent(&Fdo->ScanEvent, IO_NO_INCREMENT, FALSE);
+            continue;
+        }
 
-        if (__FdoGetDevicePnpState(Fdo) != Started)
-            goto loop;
+        STORE(Acquire, &Fdo->StoreInterface);
 
         status = STORE(Directory,
                        &Fdo->StoreInterface,
@@ -1003,7 +1006,7 @@ loop:
 
     KeSetEvent(&Fdo->ScanEvent, IO_NO_INCREMENT, FALSE);
 
-    Trace("<====\n");
+    Info("<====\n");
     return STATUS_SUCCESS;
 }
 
@@ -1049,7 +1052,7 @@ FdoSuspend(
     PXENBUS_FDO         Fdo = Context;
     PKEVENT             Event;
 
-    Trace("====>\n");
+    Info("====>\n");
 
     // We really want to know what CPU this thread will run on
     KeSetSystemAffinityThread((KAFFINITY)1);
@@ -1075,10 +1078,13 @@ FdoSuspend(
         if (ThreadIsAlerted(Self))
             break;
 
-        STORE(Acquire, &Fdo->StoreInterface);
+        // It is not safe to use interfaces before this point
+        if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0) {
+            KeSetEvent(&Fdo->SuspendEvent, IO_NO_INCREMENT, FALSE);
+            continue;
+        }
 
-        if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0)
-            goto loop;
+        STORE(Acquire, &Fdo->StoreInterface);
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -1123,7 +1129,7 @@ loop:
 
     KeSetEvent(&Fdo->SuspendEvent, IO_NO_INCREMENT, FALSE);
 
-    Trace("<====\n");
+    Info("<====\n");
     return STATUS_SUCCESS;
 }
 
@@ -1189,59 +1195,23 @@ FdoBalloon(
     PXENBUS_FDO         Fdo = Context;
     PKEVENT             Event;
     LARGE_INTEGER       Timeout;
-    PCHAR               Buffer;
-    ULONGLONG           VideoRAM;
     ULONGLONG           StaticMax;
+    BOOLEAN             Initialized;
     BOOLEAN             Active;
     NTSTATUS            status;
 
-    Trace("====>\n");
+    Info("====>\n");
 
     Event = ThreadGetEvent(Self);
 
     Timeout.QuadPart = TIME_RELATIVE(TIME_S(1));
 
-    STORE(Acquire, &Fdo->StoreInterface);
-
-    status = STORE(Read,
-                   &Fdo->StoreInterface,
-                   NULL,
-                   "memory",
-                   "static-max",
-                   &Buffer);
-    if (!NT_SUCCESS(status))
-        goto fail1;
-
-    StaticMax = _strtoui64(Buffer, NULL, 10);
-
-    STORE(Free,
-          &Fdo->StoreInterface,
-          Buffer);
-
-    status = STORE(Read,
-                   &Fdo->StoreInterface,
-                   NULL,
-                   "memory",
-                   "videoram",
-                   &Buffer);
-    if (NT_SUCCESS(status)) {
-        VideoRAM = _strtoui64(Buffer, NULL, 10);
-
-        STORE(Free,
-              &Fdo->StoreInterface,
-              Buffer);
-    } else {
-        VideoRAM = 0;
-    }
-
-    StaticMax -= VideoRAM;
-    StaticMax /= 4;   // We need the value in pages
-
-    STORE(Release, &Fdo->StoreInterface);
-
+    StaticMax = 0;
+    Initialized = FALSE;
     Active = FALSE;
 
     for (;;) {
+        PCHAR       Buffer;
         ULONGLONG   Target;
         ULONGLONG   Size;
         BOOLEAN     AllowInflation;
@@ -1263,10 +1233,69 @@ FdoBalloon(
         if (ThreadIsAlerted(Self))
             break;
 
+        // It is not safe to use interfaces before this point
+        if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0) {
+            if (Active) {
+                Active = FALSE;
+
+                __FdoBalloonClearActive(Fdo);
+            }
+
+            KeSetEvent(&Fdo->BalloonEvent, IO_NO_INCREMENT, FALSE);
+            continue;
+        }
+
         STORE(Acquire, &Fdo->StoreInterface);
 
-        if (__FdoGetDevicePowerState(Fdo) != PowerDeviceD0)
-            goto loop;
+        if (!Initialized) {
+            ULONGLONG   VideoRAM;
+
+            ASSERT(!Active);
+
+            status = STORE(Read,
+                           &Fdo->StoreInterface,
+                           NULL,
+                           "memory",
+                           "static-max",
+                           &Buffer);
+            if (!NT_SUCCESS(status))
+                goto loop;
+
+            StaticMax = _strtoui64(Buffer, NULL, 10);
+
+            STORE(Free,
+                  &Fdo->StoreInterface,
+                  Buffer);
+
+            if (StaticMax == 0)
+                goto loop;
+
+            status = STORE(Read,
+                           &Fdo->StoreInterface,
+                           NULL,
+                           "memory",
+                           "videoram",
+                           &Buffer);
+            if (NT_SUCCESS(status)) {
+                VideoRAM = _strtoui64(Buffer, NULL, 10);
+
+                STORE(Free,
+                      &Fdo->StoreInterface,
+                      Buffer);
+            } else {
+                VideoRAM = 0;
+            }
+
+            if (StaticMax < VideoRAM)
+                goto loop;
+
+            StaticMax -= VideoRAM;
+            StaticMax /= 4;   // We need the value in pages
+
+            Initialized = TRUE;
+        }
+
+        ASSERT(Initialized);
 
         status = STORE(Read,
                        &Fdo->StoreInterface,
@@ -1362,13 +1391,8 @@ loop:
 
     KeSetEvent(&Fdo->BalloonEvent, IO_NO_INCREMENT, FALSE);
 
-    Trace("<====\n");
+    Info("<====\n");
     return STATUS_SUCCESS;
-
-fail1:
-    Error("fail1 (%08x)\n", status);
-
-    return status;
 }
 
 static DECLSPEC_NOINLINE VOID
