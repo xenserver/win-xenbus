@@ -51,7 +51,8 @@ struct _XENBUS_RANGE_SET {
     KSPIN_LOCK      Lock;
     LIST_ENTRY      List;
     PLIST_ENTRY     Cursor;
-    ULONGLONG       Count;
+    ULONG           RangeCount;
+    ULONGLONG       ItemCount;
     PRANGE          Spare;
 };
 
@@ -102,17 +103,21 @@ __RangeSetAudit(
 {
     if (__RangeSetIsEmpty(RangeSet)) {
         ASSERT3P(RangeSet->Cursor, ==, &RangeSet->List);
-        ASSERT3U(RangeSet->Count, ==, 0);
+        ASSERT3U(RangeSet->RangeCount, ==, 0);
+        ASSERT3U(RangeSet->ItemCount, ==, 0);
     } else {
         BOOLEAN     FoundCursor;
-        ULONGLONG   Count;
+        ULONG       RangeCount;
+        ULONGLONG   ItemCount;
         PLIST_ENTRY ListEntry;
 
         ASSERT3P(RangeSet->Cursor, !=, &RangeSet->List);
-        ASSERT3U(RangeSet->Count, !=, 0);
+        ASSERT3U(RangeSet->RangeCount, !=, 0);
+        ASSERT3U(RangeSet->ItemCount, !=, 0);
 
         FoundCursor = FALSE;
-        Count = 0;
+        RangeCount = 0;
+        ItemCount = 0;
 
         for (ListEntry = RangeSet->List.Flink;
              ListEntry != &RangeSet->List;
@@ -125,7 +130,8 @@ __RangeSetAudit(
             Range = CONTAINING_RECORD(ListEntry, RANGE, ListEntry);
 
             ASSERT3S(Range->Start, <=, Range->End);
-            Count += Range->End + 1 - Range->Start;
+            RangeCount++;
+            ItemCount += Range->End + 1 - Range->Start;
 
             if (ListEntry->Flink != &RangeSet->List) {
                 PRANGE Next;
@@ -136,7 +142,8 @@ __RangeSetAudit(
             }
         }
 
-        ASSERT3U(Count, ==, RangeSet->Count);
+        ASSERT3U(RangeCount, ==, RangeSet->RangeCount);
+        ASSERT3U(ItemCount, ==, RangeSet->ItemCount);
         ASSERT(FoundCursor);
     }
 }
@@ -159,6 +166,9 @@ __RangeSetRemove(
     RangeSet->Cursor = (After) ? Cursor->Flink : Cursor->Blink;
 
     RemoveEntryList(Cursor);
+
+    ASSERT(RangeSet->RangeCount != 0);
+    --RangeSet->RangeCount;
 
     if (RangeSet->Cursor == &RangeSet->List)
         RangeSet->Cursor = (After) ? RangeSet->List.Flink : RangeSet->List.Blink;
@@ -239,6 +249,10 @@ RangeSetPop(
 
     KeAcquireSpinLock(&RangeSet->Lock, &Irql);
 
+#if RANGE_SET_AUDIT
+    __RangeSetAudit(RangeSet);
+#endif
+
     status = STATUS_INSUFFICIENT_RESOURCES;
     if (__RangeSetIsEmpty(RangeSet))
         goto fail1;
@@ -249,7 +263,9 @@ RangeSetPop(
     Range = CONTAINING_RECORD(Cursor, RANGE, ListEntry);
 
     *Item = Range->Start++;
-    --RangeSet->Count;
+
+    ASSERT(RangeSet->ItemCount != 0);
+    --RangeSet->ItemCount;
 
     if (*Item == Range->End)    // Singleton
         __RangeSetRemove(RangeSet, TRUE);
@@ -323,6 +339,8 @@ __RangeSetAdd(
     else
         INSERT_BEFORE(Cursor, &Range->ListEntry);
 
+    RangeSet->RangeCount++;
+
     RangeSet->Cursor = &Range->ListEntry;
 
     __RangeSetMergeBackwards(RangeSet);
@@ -351,6 +369,10 @@ RangeSetGet(
     NTSTATUS                status;
 
     KeAcquireSpinLock(&RangeSet->Lock, &Irql);
+
+#if RANGE_SET_AUDIT
+    __RangeSetAudit(RangeSet);
+#endif
 
     Cursor = RangeSet->Cursor;
     ASSERT(Cursor != &RangeSet->List);
@@ -410,7 +432,8 @@ RangeSetGet(
     Range->End = Item - 1;
 
 done:
-    --RangeSet->Count;
+    ASSERT(RangeSet->ItemCount != 0);
+    --RangeSet->ItemCount;
 
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
@@ -531,6 +554,10 @@ RangeSetPut(
 
     KeAcquireSpinLock(&RangeSet->Lock, &Irql);
 
+#if RANGE_SET_AUDIT
+    __RangeSetAudit(RangeSet);
+#endif
+
     Cursor = RangeSet->Cursor;
 
     if (__RangeSetIsEmpty(RangeSet)) {
@@ -551,7 +578,7 @@ RangeSetPut(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    RangeSet->Count += End + 1 - Start;
+    RangeSet->ItemCount += End + 1 - Start;
 
 #if RANGE_SET_AUDIT
     __RangeSetAudit(RangeSet);
