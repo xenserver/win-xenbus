@@ -428,7 +428,7 @@ __PoolTrimShared(
 
     KeMemoryBarrier();
 
-    Excess = __min((LONG)Pool->MinimumPopulation - (LONG)Pool->Reservation, 0);
+    Excess = __max((LONG)Pool->MinimumPopulation - (LONG)Pool->Reservation, 0);
     
     while (Excess != 0) {
         PLIST_ENTRY     ListEntry;
