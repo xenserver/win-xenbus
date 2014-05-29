@@ -448,6 +448,22 @@ PdoGetSharedInfoInterface(
     return __PdoGetSharedInfoInterface(Pdo);
 }
 
+static FORCEINLINE PXENBUS_CACHE_INTERFACE
+__PdoGetCacheInterface(
+    IN  PXENBUS_PDO Pdo
+    )
+{
+    return FdoGetCacheInterface(__PdoGetFdo(Pdo));
+}
+
+PXENBUS_CACHE_INTERFACE
+PdoGetCacheInterface(
+    IN  PXENBUS_PDO Pdo
+    )
+{
+    return __PdoGetCacheInterface(Pdo);
+}
+
 PDMA_ADAPTER
 PdoGetDmaAdapter(
     IN  PXENBUS_PDO         Pdo,
@@ -1211,6 +1227,45 @@ done:
 }
 
 static NTSTATUS
+PdoQueryCacheInterface(
+    IN  PXENBUS_PDO             Pdo,
+    IN  PIRP                    Irp
+    )
+{
+    PIO_STACK_LOCATION          StackLocation;
+    USHORT                      Size;
+    USHORT                      Version;
+    PINTERFACE                  Interface;
+    NTSTATUS                    status;
+
+    status = Irp->IoStatus.Status;        
+
+    StackLocation = IoGetCurrentIrpStackLocation(Irp);
+    Size = StackLocation->Parameters.QueryInterface.Size;
+    Version = StackLocation->Parameters.QueryInterface.Version;
+    Interface = StackLocation->Parameters.QueryInterface.Interface;
+
+    if (StackLocation->Parameters.QueryInterface.Version != CACHE_INTERFACE_VERSION)
+        goto done;
+
+    status = STATUS_BUFFER_TOO_SMALL;        
+    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
+        goto done;
+
+    Interface->Size = sizeof (INTERFACE);
+    Interface->Version = CACHE_INTERFACE_VERSION;
+    Interface->Context = __PdoGetCacheInterface(Pdo);
+    Interface->InterfaceReference = NULL;
+    Interface->InterfaceDereference = NULL;
+
+    Irp->IoStatus.Information = 0;
+    status = STATUS_SUCCESS;
+
+done:
+    return status;
+}
+
+static NTSTATUS
 PdoQueryGnttabInterface(
     IN  PXENBUS_PDO             Pdo,
     IN  PIRP                    Irp
@@ -1265,6 +1320,7 @@ struct _INTERFACE_ENTRY PdoInterfaceTable[] = {
     DEFINE_HANDLER(SHARED_INFO_INTERFACE, PdoQuerySharedInfoInterface),
     DEFINE_HANDLER(EVTCHN_INTERFACE, PdoQueryEvtchnInterface),
     DEFINE_HANDLER(STORE_INTERFACE, PdoQueryStoreInterface),
+    DEFINE_HANDLER(CACHE_INTERFACE, PdoQueryCacheInterface),
     DEFINE_HANDLER(GNTTAB_INTERFACE, PdoQueryGnttabInterface),
     { NULL, NULL, NULL }
 };
