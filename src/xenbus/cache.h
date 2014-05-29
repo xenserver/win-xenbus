@@ -33,53 +33,28 @@
 #define _XENBUS_CACHE_H
 
 #include <ntddk.h>
-#include <store_interface.h>
+#include <xen.h>
+#include <cache_interface.h>
 
-typedef struct _XENBUS_CACHE XENBUS_CACHE, *PXENBUS_CACHE;
+#include "fdo.h"
+
+struct _XENBUS_CACHE_INTERFACE {
+    PXENBUS_CACHE_OPERATIONS    Operations;
+    PXENBUS_CACHE_CONTEXT       Context;
+};
+
+C_ASSERT(FIELD_OFFSET(XENBUS_CACHE_INTERFACE, Operations) == (ULONG_PTR)CACHE_OPERATIONS(NULL));
+C_ASSERT(FIELD_OFFSET(XENBUS_CACHE_INTERFACE, Context) == (ULONG_PTR)CACHE_CONTEXT(NULL));
 
 extern NTSTATUS
 CacheInitialize(
-    IN  PXENBUS_STORE_INTERFACE StoreInterface,
-    IN  const CHAR              *Name,
-    IN  ULONG                   Size,
-    IN  ULONG                   Reservation,
-    IN  NTSTATUS                (*Ctor)(PVOID, PVOID),
-    IN  VOID                    (*Dtor)(PVOID, PVOID),
-    IN  VOID                    (*AcquireLock)(PVOID),
-    IN  VOID                    (*ReleaseLock)(PVOID),
-    IN  PVOID                   Argument,
-    OUT PXENBUS_CACHE           *Cache
+    IN  PXENBUS_FDO             Fdo,
+    OUT PXENBUS_CACHE_INTERFACE Interface
     );
 
 extern VOID
 CacheTeardown(
-    IN  PXENBUS_CACHE   Cache
-    );
-
-extern PVOID
-CacheGet(
-    IN  PXENBUS_CACHE   Cache,
-    IN  BOOLEAN         Locked
-    );
-
-extern VOID
-CachePut(
-    IN  PXENBUS_CACHE   Cache,
-    IN  PVOID           Object,
-    IN  BOOLEAN         Locked
-    );
-
-typedef struct _XENBUS_CACHE_STATISTICS {
-    ULONG   Allocated;
-    ULONG   MaximumAllocated;
-    ULONG   Population;
-    ULONG   MinimumPopulation;
-} XENBUS_CACHE_STATISTICS, *PXENBUS_CACHE_STATISTICS;
-
-extern VOID
-CacheGetStatistics(
-    IN  PXENBUS_CACHE            Cache,
-    OUT PXENBUS_CACHE_STATISTICS Statistics
+    IN OUT  PXENBUS_CACHE_INTERFACE Interface
     );
 
 #endif  // _XENBUS_CACHE_H

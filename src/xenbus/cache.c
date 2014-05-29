@@ -44,8 +44,6 @@ RtlRandomEx (
     __inout PULONG Seed
     );
 
-#define CACHE_TAG   'HCAC'
-
 typedef struct _OBJECT_HEADER {
     ULONG       Magic;
 
@@ -69,6 +67,7 @@ typedef struct _CACHE_FIST {
 #define MAXNAMELEN  128
 
 struct _XENBUS_CACHE {
+    LIST_ENTRY      ListEntry;
     CHAR            Name[MAXNAMELEN];
     ULONG           Size;
     ULONG           Reservation;
@@ -88,6 +87,17 @@ struct _XENBUS_CACHE {
     LONG            MinimumPopulation;
     CACHE_FIST      FIST;
 };
+
+struct _XENBUS_CACHE_CONTEXT {
+    LONG                            References;
+    PXENBUS_DEBUG_INTERFACE         DebugInterface;
+    PXENBUS_DEBUG_CALLBACK          DebugCallback;
+    PXENBUS_STORE_INTERFACE         StoreInterface;
+    KSPIN_LOCK                      Lock;
+    LIST_ENTRY                      List;
+};
+
+#define CACHE_TAG   'HCAC'
 
 static FORCEINLINE PVOID
 __CacheAllocate(
@@ -333,15 +343,18 @@ __CachePutMagazine(
     return FALSE;
 }
 
-PVOID
+static PVOID
 CacheGet(
-    IN  PXENBUS_CACHE   Cache,
-    IN  BOOLEAN         Locked
+    IN  PXENBUS_CACHE_CONTEXT   Context,
+    IN  PXENBUS_CACHE           Cache,
+    IN  BOOLEAN                 Locked
     )
 {
-    KIRQL               Irql;
-    ULONG               Cpu;
-    PVOID               Object;
+    KIRQL                       Irql;
+    ULONG                       Cpu;
+    PVOID                       Object;
+
+    UNREFERENCED_PARAMETER(Context);
 
     if (Cache->FIST.Probability != 0) {
         LONG    Defer;
@@ -369,15 +382,18 @@ CacheGet(
     return Object;
 }
 
-VOID
+static VOID
 CachePut(
-    IN  PXENBUS_CACHE   Cache,
-    IN  PVOID           Object,
-    IN  BOOLEAN         Locked
+    IN  PXENBUS_CACHE_CONTEXT   Context,
+    IN  PXENBUS_CACHE           Cache,
+    IN  PVOID                   Object,
+    IN  BOOLEAN                 Locked
     )
 {
-    KIRQL               Irql;
-    ULONG               Cpu;
+    KIRQL                       Irql;
+    ULONG                       Cpu;
+
+    UNREFERENCED_PARAMETER(Context);
 
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
     Cpu = KeGetCurrentProcessorNumber();
@@ -386,18 +402,6 @@ CachePut(
         __CachePutShared(Cache, Object, Locked);
 
     KeLowerIrql(Irql);
-}
-
-VOID
-CacheGetStatistics(
-    IN  PXENBUS_CACHE            Cache,
-    OUT PXENBUS_CACHE_STATISTICS Statistics
-    )
-{
-    Statistics->Allocated = Cache->Allocated;
-    Statistics->MaximumAllocated = Cache->MaximumAllocated;
-    Statistics->Population = Cache->Population;
-    Statistics->MinimumPopulation = Cache->MinimumPopulation;
 }
 
 static FORCEINLINE
@@ -528,9 +532,9 @@ CacheDpc(
 }
 
 static FORCEINLINE VOID
-__CacheSetupFIST(
-    IN  PXENBUS_CACHE           Cache,
-    IN  PXENBUS_STORE_INTERFACE StoreInterface
+__CacheGetFISTEntries(
+    IN  PXENBUS_CACHE_CONTEXT   Context,
+    IN  PXENBUS_CACHE           Cache
     )
 {
     CHAR                        Node[sizeof ("fist/cache/") + MAXNAMELEN];
@@ -545,7 +549,7 @@ __CacheSetupFIST(
     ASSERT(NT_SUCCESS(status));
 
     status = STORE(Read,
-                   StoreInterface,
+                   Context->StoreInterface,
                    NULL,
                    Node,
                    "defer",
@@ -556,12 +560,12 @@ __CacheSetupFIST(
         Cache->FIST.Defer = (ULONG)strtol(Buffer, NULL, 0);
 
         STORE(Free,
-              StoreInterface,
+              Context->StoreInterface,
               Buffer);
     }
 
     status = STORE(Read,
-                   StoreInterface,
+                   Context->StoreInterface,
                    NULL,
                    Node,
                    "probability",
@@ -572,7 +576,7 @@ __CacheSetupFIST(
         Cache->FIST.Probability = (ULONG)strtol(Buffer, NULL, 0);
 
         STORE(Free,
-              StoreInterface,
+              Context->StoreInterface,
               Buffer);
     }
 
@@ -589,9 +593,9 @@ __CacheSetupFIST(
     Cache->FIST.Seed = Now.LowPart;
 }
 
-NTSTATUS
-CacheInitialize(
-    IN  PXENBUS_STORE_INTERFACE StoreInterface,
+static NTSTATUS
+CacheCreate(
+    IN  PXENBUS_CACHE_CONTEXT   Context,
     IN  const CHAR              *Name,
     IN  ULONG                   Size,
     IN  ULONG                   Reservation,
@@ -605,7 +609,10 @@ CacheInitialize(
 {
     LARGE_INTEGER               Timeout;
     LIST_ENTRY                  List;
+    KIRQL                       Irql;
     NTSTATUS                    status;
+
+    Trace("====> (%s)\n", Name);
 
     *Cache = __CacheAllocate(sizeof (XENBUS_CACHE));
 
@@ -627,7 +634,7 @@ CacheInitialize(
     (*Cache)->ReleaseLock = ReleaseLock;
     (*Cache)->Argument = Argument;
 
-    __CacheSetupFIST(*Cache, StoreInterface);
+    __CacheGetFISTEntries(Context, *Cache);
 
     InitializeListHead(&(*Cache)->GetList);
 
@@ -659,6 +666,12 @@ CacheInitialize(
                  Timeout,
                  CACHE_PERIOD,
                  &(*Cache)->Dpc);
+
+    KeAcquireSpinLock(&Context->Lock, &Irql);
+    InsertTailList(&Context->List, &(*Cache)->ListEntry);
+    KeReleaseSpinLock(&Context->Lock, Irql);
+
+    Trace("<====\n");
 
     return STATUS_SUCCESS;
 
@@ -699,12 +712,22 @@ fail1:
     return status;    
 }
 
-VOID
-CacheTeardown(
-    IN  PXENBUS_CACHE   Cache
+static VOID
+CacheDestroy(
+    IN  PXENBUS_CACHE_CONTEXT   Context,
+    IN  PXENBUS_CACHE           Cache
     )
 {
-    LIST_ENTRY          List;
+    KIRQL                       Irql;
+    LIST_ENTRY                  List;
+
+    Trace("====> (%s)\n", Cache->Name);
+
+    KeAcquireSpinLock(&Context->Lock, &Irql);
+    RemoveEntryList(&Cache->ListEntry);
+    KeReleaseSpinLock(&Context->Lock, Irql);
+
+    RtlZeroMemory(&Cache->ListEntry, sizeof (LIST_ENTRY));
 
     KeCancelTimer(&Cache->Timer);
     KeFlushQueuedDpcs();
@@ -741,4 +764,173 @@ CacheTeardown(
 
     ASSERT(IsZeroMemory(Cache, sizeof (XENBUS_CACHE)));
     __CacheFree(Cache);
+
+    Trace("<====\n");
 }
+
+static VOID
+CacheAcquire(
+    IN  PXENBUS_CACHE_CONTEXT Context
+    )
+{
+    InterlockedIncrement(&Context->References);
+}
+
+static VOID
+CacheRelease(
+    IN  PXENBUS_CACHE_CONTEXT Context
+    )
+{
+    ASSERT(Context->References != 0);
+    InterlockedDecrement(&Context->References);
+}
+
+#define CACHE_OPERATION(_Type, _Name, _Arguments) \
+        Cache ## _Name,
+
+static XENBUS_CACHE_OPERATIONS  Operations = {
+    DEFINE_CACHE_OPERATIONS
+};
+
+#undef CACHE_OPERATION
+
+static VOID
+CacheDebugCallback(
+    IN  PVOID               Argument,
+    IN  BOOLEAN             Crashing
+    )
+{
+    PXENBUS_CACHE_CONTEXT   Context = Argument;
+
+    UNREFERENCED_PARAMETER(Crashing);
+
+    if (!IsListEmpty(&Context->List)) {
+        PLIST_ENTRY ListEntry;
+
+        DEBUG(Printf,
+              Context->DebugInterface,
+              Context->DebugCallback,
+              "CACHES:\n");
+
+        for (ListEntry = Context->List.Flink;
+             ListEntry != &Context->List;
+             ListEntry = ListEntry->Flink) {
+            PXENBUS_CACHE   Cache;
+
+            Cache = CONTAINING_RECORD(ListEntry, XENBUS_CACHE, ListEntry);
+
+            DEBUG(Printf,
+                  Context->DebugInterface,
+                  Context->DebugCallback,
+                  "- %s: Allocated = %d (Max = %d) Population = %d (Min = %d)\n",
+                  Cache->Name,
+                  Cache->Allocated,
+                  Cache->MaximumAllocated,
+                  Cache->Population,
+                  Cache->MinimumPopulation);
+        }
+    }
+}
+
+NTSTATUS
+CacheInitialize(
+    IN  PXENBUS_FDO             Fdo,
+    OUT PXENBUS_CACHE_INTERFACE Interface
+    )
+{
+    PXENBUS_CACHE_CONTEXT       Context;
+    NTSTATUS                    status;
+
+    Trace("====>\n");
+
+    Context = __CacheAllocate(sizeof (XENBUS_CACHE_CONTEXT));
+
+    status = STATUS_NO_MEMORY;
+    if (Context == NULL)
+        goto fail1;
+
+    InitializeListHead(&Context->List);
+    KeInitializeSpinLock(&Context->Lock);
+
+    Context->StoreInterface = FdoGetStoreInterface(Fdo);
+
+    STORE(Acquire, Context->StoreInterface);
+
+    Context->DebugInterface = FdoGetDebugInterface(Fdo);
+
+    DEBUG(Acquire, Context->DebugInterface);
+
+    status = DEBUG(Register,
+                   Context->DebugInterface,
+                   __MODULE__ "|CACHE",
+                   CacheDebugCallback,
+                   Context,
+                   &Context->DebugCallback);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    Interface->Context = Context;
+    Interface->Operations = &Operations;
+
+    Trace("<====\n");
+
+    return STATUS_SUCCESS;
+
+fail2:
+    Error("fail2\n");
+
+    DEBUG(Release, Context->DebugInterface);
+    Context->DebugInterface = NULL;
+
+    STORE(Release, Context->StoreInterface);
+    Context->StoreInterface = NULL;
+
+    RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
+    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
+
+    ASSERT(IsZeroMemory(Context, sizeof (XENBUS_CACHE_CONTEXT)));
+    __CacheFree(Context);
+
+fail1:
+    Error("fail1 (%08x)\n", status);
+
+    return status;
+}
+
+VOID
+CacheTeardown(
+    IN OUT  PXENBUS_CACHE_INTERFACE Interface
+    )
+{
+    PXENBUS_CACHE_CONTEXT           Context = Interface->Context;
+
+    Trace("====>\n");
+
+    if (!IsListEmpty(&Context->List))
+        BUG("OUTSTANDING CACHES");
+
+    DEBUG(Deregister,
+          Context->DebugInterface,
+          Context->DebugCallback);
+    Context->DebugCallback = NULL;
+
+    DEBUG(Release, Context->DebugInterface);
+    Context->DebugInterface = NULL;
+
+    STORE(Release, Context->StoreInterface);
+    Context->StoreInterface = NULL;
+
+    RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
+    RtlZeroMemory(&Context->List, sizeof (LIST_ENTRY));
+
+    ASSERT(IsZeroMemory(Context, sizeof (XENBUS_CACHE_CONTEXT)));
+    __CacheFree(Context);
+
+    RtlZeroMemory(Interface, sizeof (XENBUS_CACHE_INTERFACE));
+
+    Trace("<====\n");
+}
+
+
+
+

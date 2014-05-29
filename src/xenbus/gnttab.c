@@ -38,7 +38,6 @@
 #include "gnttab.h"
 #include "fdo.h"
 #include "range_set.h"
-#include "cache.h"
 #include "dbg_print.h"
 #include "assert.h"
 
@@ -66,8 +65,8 @@ struct _XENBUS_GNTTAB_CONTEXT {
     PXENBUS_RANGE_SET           RangeSet;
     ULONG                       Seed;
     LONG                        GetFailed;
-    PXENBUS_CACHE               DescriptorCache;
-    PXENBUS_STORE_INTERFACE     StoreInterface;
+    PXENBUS_CACHE_INTERFACE     CacheInterface;
+    PXENBUS_CACHE               Cache;
     PXENBUS_SUSPEND_INTERFACE   SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK    SuspendCallbackEarly;
     PXENBUS_DEBUG_INTERFACE     DebugInterface;
@@ -244,16 +243,17 @@ __GnttabFill(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    status = CacheInitialize(Context->StoreInterface,
-                            "gnttab",
-                            sizeof (XENBUS_GNTTAB_DESCRIPTOR),
-                            GNTTAB_RESERVATION,
-                            GnttabDescriptorCtor,
-                            GnttabDescriptorDtor,
-                            GnttabAcquireLock,
-                            GnttabReleaseLock,
-                            Context,
-                            &Context->DescriptorCache);
+    status = CACHE(Create,
+                   Context->CacheInterface,
+                   "gnttab",
+                   sizeof (XENBUS_GNTTAB_DESCRIPTOR),
+                   GNTTAB_RESERVATION,
+                   GnttabDescriptorCtor,
+                   GnttabDescriptorDtor,
+                   GnttabAcquireLock,
+                   GnttabReleaseLock,
+                   Context,
+                   &Context->Cache);
     if (!NT_SUCCESS(status))
         goto fail2;
 
@@ -278,8 +278,10 @@ __GnttabEmpty(
 {
     LONGLONG                    Entry;
 
-    CacheTeardown(Context->DescriptorCache);
-    Context->DescriptorCache = NULL;
+    CACHE(Destroy,
+          Context->CacheInterface,
+          Context->Cache);
+    Context->Cache = NULL;
 
     for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
          Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
@@ -301,7 +303,10 @@ GnttabGet(
 {
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor;
 
-    Descriptor = CacheGet(Context->DescriptorCache, FALSE);
+    Descriptor = CACHE(Get,
+                       Context->CacheInterface,
+                       Context->Cache,
+                       FALSE);
 
     if (Descriptor == NULL)
         (VOID) InterlockedIncrement(&Context->GetFailed);
@@ -319,7 +324,11 @@ GnttabPut(
 {
     ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
 
-    CachePut(Context->DescriptorCache, Descriptor, FALSE);
+    CACHE(Put,
+          Context->CacheInterface,
+          Context->Cache,
+          Descriptor,
+          FALSE);
 }
 
 static FORCEINLINE NTSTATUS
@@ -525,7 +534,6 @@ GnttabDebugCallback(
     )
 {
     PXENBUS_GNTTAB_CONTEXT  Context = Argument;
-    XENBUS_CACHE_STATISTICS  Statistics;
 
     UNREFERENCED_PARAMETER(Crashing);
 
@@ -540,23 +548,6 @@ GnttabDebugCallback(
           Context->DebugCallback,
           "FrameCount = %u\n",
           Context->FrameCount);
-
-    CacheGetStatistics(Context->DescriptorCache,
-                       &Statistics);
-
-    DEBUG(Printf,
-          Context->DebugInterface,
-          Context->DebugCallback,
-          "DESCRIPTOR CACHE: Allocated = %u (Maximum = %u)\n",
-          Statistics.Allocated,
-          Statistics.MaximumAllocated);
-
-    DEBUG(Printf,
-          Context->DebugInterface,
-          Context->DebugCallback,
-          "DESCRIPTOR CACHE: Population = %u (Minimum = %u)\n",
-          Statistics.Population,
-          Statistics.MinimumPopulation);
 
     DEBUG(Printf,
           Context->DebugInterface,
@@ -606,9 +597,9 @@ GnttabInitialize(
 
     KeInitializeSpinLock(&Context->Lock);
 
-    Context->StoreInterface = FdoGetStoreInterface(Fdo);
+    Context->CacheInterface = FdoGetCacheInterface(Fdo);
 
-    STORE(Acquire, Context->StoreInterface);
+    CACHE(Acquire, Context->CacheInterface);
 
     __GnttabFill(Context);
 
@@ -664,8 +655,8 @@ fail3:
 
     __GnttabEmpty(Context);
 
-    STORE(Release, Context->StoreInterface);
-    Context->StoreInterface = NULL;
+    CACHE(Release, Context->CacheInterface);
+    Context->CacheInterface = NULL;
 
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
 
@@ -717,8 +708,8 @@ GnttabTeardown(
 
     __GnttabEmpty(Context);
 
-    STORE(Release, Context->StoreInterface);
-    Context->StoreInterface = NULL;
+    CACHE(Release, Context->CacheInterface);
+    Context->CacheInterface = NULL;
 
     RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
 

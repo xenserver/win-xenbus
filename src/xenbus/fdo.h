@@ -189,6 +189,13 @@ FdoGetStoreInterface(
     IN  PXENBUS_FDO Fdo
     );
 
+#include "cache.h"
+
+extern PXENBUS_CACHE_INTERFACE
+FdoGetCacheInterface(
+    IN  PXENBUS_FDO Fdo
+    );
+
 #include "gnttab.h"
 
 extern PXENBUS_GNTTAB_INTERFACE
