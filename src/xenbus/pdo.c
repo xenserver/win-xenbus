@@ -1014,11 +1014,11 @@ PdoQueryBusInterface(
     Version = StackLocation->Parameters.QueryInterface.Version;
     BusInterface = (PBUS_INTERFACE_STANDARD)StackLocation->Parameters.QueryInterface.Interface;
 
-    if (StackLocation->Parameters.QueryInterface.Version != 1)
+    if (Version != 1)
         goto done;
 
     status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (BUS_INTERFACE_STANDARD))
+    if (Size < sizeof (BUS_INTERFACE_STANDARD))
         goto done;
 
     *BusInterface = Pdo->BusInterface;
@@ -1031,278 +1031,55 @@ done:
     return status;
 }
 
-static NTSTATUS
-PdoQueryDebugInterface(
-    IN  PXENBUS_PDO         Pdo,
-    IN  PIRP                Irp
-    )
-{
-    PIO_STACK_LOCATION      StackLocation;
-    USHORT                  Size;
-    USHORT                  Version;
-    PINTERFACE              Interface;
-    NTSTATUS                status;
+#define GET(_Interface) __PdoGet ## _Interface ## Interface
 
-    status = Irp->IoStatus.Status;        
+#define DEFINE_HANDLER(_Version, _Interface)                        \
+static NTSTATUS                                                     \
+PdoQuery ## _Interface ## Interface(                                \
+    IN  PXENBUS_PDO             Pdo,                                \
+    IN  PIRP                    Irp                                 \
+    )                                                               \
+{                                                                   \
+    PIO_STACK_LOCATION          StackLocation;                      \
+    USHORT                      Size;                               \
+    USHORT                      Version;                            \
+    PINTERFACE                  Interface;                          \
+    NTSTATUS                    status;                             \
+                                                                    \
+    status = Irp->IoStatus.Status;                                  \
+                                                                    \
+    StackLocation = IoGetCurrentIrpStackLocation(Irp);              \
+    Size = StackLocation->Parameters.QueryInterface.Size;           \
+    Version = StackLocation->Parameters.QueryInterface.Version;     \
+    Interface = StackLocation->Parameters.QueryInterface.Interface; \
+                                                                    \
+    if (Version != (_Version))                                      \
+        goto done;                                                  \
+                                                                    \
+    status = STATUS_BUFFER_TOO_SMALL;                               \
+    if (Size < sizeof (INTERFACE))                                  \
+        goto done;                                                  \
+                                                                    \
+    Interface->Size = sizeof (INTERFACE);                           \
+    Interface->Version = (_Version);                                \
+    Interface->Context = GET(_Interface)(Pdo);                      \
+    Interface->InterfaceReference = NULL;                           \
+    Interface->InterfaceDereference = NULL;                         \
+                                                                    \
+    Irp->IoStatus.Information = 0;                                  \
+    status = STATUS_SUCCESS;                                        \
+                                                                    \
+done:                                                               \
+    return status;                                                  \
+}                                                                   \
 
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != DEBUG_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = DEBUG_INTERFACE_VERSION;
-    Interface->Context = __PdoGetDebugInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQuerySuspendInterface(
-    IN  PXENBUS_PDO             Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != SUSPEND_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = SUSPEND_INTERFACE_VERSION;
-    Interface->Context = __PdoGetSuspendInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQuerySharedInfoInterface(
-    IN  PXENBUS_PDO                 Pdo,
-    IN  PIRP                        Irp
-    )
-{
-    PIO_STACK_LOCATION              StackLocation;
-    USHORT                          Size;
-    USHORT                          Version;
-    PINTERFACE                      Interface;
-    NTSTATUS                        status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != SHARED_INFO_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = SHARED_INFO_INTERFACE_VERSION;
-    Interface->Context = __PdoGetSharedInfoInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQueryEvtchnInterface(
-    IN  PXENBUS_PDO             Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != EVTCHN_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = EVTCHN_INTERFACE_VERSION;
-    Interface->Context = __PdoGetEvtchnInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQueryStoreInterface(
-    IN  PXENBUS_PDO             Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != STORE_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = STORE_INTERFACE_VERSION;
-    Interface->Context = __PdoGetStoreInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQueryCacheInterface(
-    IN  PXENBUS_PDO             Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != CACHE_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = CACHE_INTERFACE_VERSION;
-    Interface->Context = __PdoGetCacheInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQueryGnttabInterface(
-    IN  PXENBUS_PDO             Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != GNTTAB_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = GNTTAB_INTERFACE_VERSION;
-    Interface->Context = __PdoGetGnttabInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
+DEFINE_HANDLER(DEBUG_INTERFACE_VERSION, Debug)
+DEFINE_HANDLER(SUSPEND_INTERFACE_VERSION, Suspend)
+DEFINE_HANDLER(SHARED_INFO_INTERFACE_VERSION, SharedInfo)
+DEFINE_HANDLER(EVTCHN_INTERFACE_VERSION, Evtchn)
+DEFINE_HANDLER(STORE_INTERFACE_VERSION, Store)
+DEFINE_HANDLER(CACHE_INTERFACE_VERSION, Cache)
+DEFINE_HANDLER(GNTTAB_INTERFACE_VERSION, Gnttab)
 
 struct _INTERFACE_ENTRY {
     const GUID  *Guid;
@@ -1310,18 +1087,20 @@ struct _INTERFACE_ENTRY {
     NTSTATUS    (*Handler)(PXENBUS_PDO, PIRP);
 };
 
-#define DEFINE_HANDLER(_Guid, _Function)    \
-        { &GUID_ ## _Guid, #_Guid, (_Function) }
+#define HANDLER(_Interface) PdoQuery ## _Interface ## Interface
+
+#define DEFINE_ENTRY(_Guid, _Interface)   \
+    { &GUID_ ## _Guid, #_Guid, HANDLER(_Interface) }
 
 struct _INTERFACE_ENTRY PdoInterfaceTable[] = {
-    DEFINE_HANDLER(BUS_INTERFACE_STANDARD, PdoQueryBusInterface),
-    DEFINE_HANDLER(DEBUG_INTERFACE, PdoQueryDebugInterface),
-    DEFINE_HANDLER(SUSPEND_INTERFACE, PdoQuerySuspendInterface),
-    DEFINE_HANDLER(SHARED_INFO_INTERFACE, PdoQuerySharedInfoInterface),
-    DEFINE_HANDLER(EVTCHN_INTERFACE, PdoQueryEvtchnInterface),
-    DEFINE_HANDLER(STORE_INTERFACE, PdoQueryStoreInterface),
-    DEFINE_HANDLER(CACHE_INTERFACE, PdoQueryCacheInterface),
-    DEFINE_HANDLER(GNTTAB_INTERFACE, PdoQueryGnttabInterface),
+    DEFINE_ENTRY(BUS_INTERFACE_STANDARD, Bus),
+    DEFINE_ENTRY(DEBUG_INTERFACE, Debug),
+    DEFINE_ENTRY(SUSPEND_INTERFACE, Suspend),
+    DEFINE_ENTRY(SHARED_INFO_INTERFACE, SharedInfo),
+    DEFINE_ENTRY(EVTCHN_INTERFACE, Evtchn),
+    DEFINE_ENTRY(STORE_INTERFACE, Store),
+    DEFINE_ENTRY(CACHE_INTERFACE, Cache),
+    DEFINE_ENTRY(GNTTAB_INTERFACE, Gnttab),
     { NULL, NULL, NULL }
 };
 

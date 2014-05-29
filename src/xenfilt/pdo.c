@@ -832,83 +832,50 @@ __PdoQueryInterface(
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-PdoQueryEmulatedInterface(
-    IN  PXENFILT_PDO            Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
+#define GET(_Interface) __PdoGet ## _Interface ## Interface
 
-    status = Irp->IoStatus.Status;        
+#define DEFINE_HANDLER(_Version, _Interface)                        \
+static NTSTATUS                                                     \
+PdoQuery ## _Interface ## Interface(                                \
+    IN  PXENFILT_PDO            Pdo,                                \
+    IN  PIRP                    Irp                                 \
+    )                                                               \
+{                                                                   \
+    PIO_STACK_LOCATION          StackLocation;                      \
+    USHORT                      Size;                               \
+    USHORT                      Version;                            \
+    PINTERFACE                  Interface;                          \
+    NTSTATUS                    status;                             \
+                                                                    \
+    status = Irp->IoStatus.Status;                                  \
+                                                                    \
+    StackLocation = IoGetCurrentIrpStackLocation(Irp);              \
+    Size = StackLocation->Parameters.QueryInterface.Size;           \
+    Version = StackLocation->Parameters.QueryInterface.Version;     \
+    Interface = StackLocation->Parameters.QueryInterface.Interface; \
+                                                                    \
+    if (Version != (_Version))                                      \
+        goto done;                                                  \
+                                                                    \
+    status = STATUS_BUFFER_TOO_SMALL;                               \
+    if (Size < sizeof (INTERFACE))                                  \
+        goto done;                                                  \
+                                                                    \
+    Interface->Size = sizeof (INTERFACE);                           \
+    Interface->Version = (_Version);                                \
+    Interface->Context = GET(_Interface)(Pdo);                      \
+    Interface->InterfaceReference = NULL;                           \
+    Interface->InterfaceDereference = NULL;                         \
+                                                                    \
+    Irp->IoStatus.Information = 0;                                  \
+    status = STATUS_SUCCESS;                                        \
+                                                                    \
+done:                                                               \
+    return status;                                                  \
+}                                                                   \
 
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != EMULATED_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = EMULATED_INTERFACE_VERSION;
-    Interface->Context = __PdoGetEmulatedInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
-
-static NTSTATUS
-PdoQueryUnplugInterface(
-    IN  PXENFILT_PDO            Pdo,
-    IN  PIRP                    Irp
-    )
-{
-    PIO_STACK_LOCATION          StackLocation;
-    USHORT                      Size;
-    USHORT                      Version;
-    PINTERFACE                  Interface;
-    NTSTATUS                    status;
-
-    status = Irp->IoStatus.Status;        
-
-    StackLocation = IoGetCurrentIrpStackLocation(Irp);
-    Size = StackLocation->Parameters.QueryInterface.Size;
-    Version = StackLocation->Parameters.QueryInterface.Version;
-    Interface = StackLocation->Parameters.QueryInterface.Interface;
-
-    if (StackLocation->Parameters.QueryInterface.Version != UNPLUG_INTERFACE_VERSION)
-        goto done;
-
-    status = STATUS_BUFFER_TOO_SMALL;        
-    if (StackLocation->Parameters.QueryInterface.Size < sizeof (INTERFACE))
-        goto done;
-
-    Interface->Size = sizeof (INTERFACE);
-    Interface->Version = UNPLUG_INTERFACE_VERSION;
-    Interface->Context = __PdoGetUnplugInterface(Pdo);
-    Interface->InterfaceReference = NULL;
-    Interface->InterfaceDereference = NULL;
-
-    Irp->IoStatus.Information = 0;
-    status = STATUS_SUCCESS;
-
-done:
-    return status;
-}
+DEFINE_HANDLER(EMULATED_INTERFACE_VERSION, Emulated)
+DEFINE_HANDLER(UNPLUG_INTERFACE_VERSION, Unplug)
 
 struct _INTERFACE_ENTRY {
     const GUID  *Guid;
@@ -916,12 +883,14 @@ struct _INTERFACE_ENTRY {
     NTSTATUS    (*Handler)(PXENFILT_PDO, PIRP);
 };
 
-#define DEFINE_HANDLER(_Guid, _Function)    \
-        { &GUID_ ## _Guid, #_Guid, (_Function) }
+#define HANDLER(_Interface) PdoQuery ## _Interface ## Interface
+
+#define DEFINE_ENTRY(_Guid, _Interface)   \
+    { &GUID_ ## _Guid, #_Guid, HANDLER(_Interface) }
 
 struct _INTERFACE_ENTRY PdoInterfaceTable[] = {
-    DEFINE_HANDLER(EMULATED_INTERFACE, PdoQueryEmulatedInterface),
-    DEFINE_HANDLER(UNPLUG_INTERFACE, PdoQueryUnplugInterface),
+    DEFINE_ENTRY(EMULATED_INTERFACE, Emulated),
+    DEFINE_ENTRY(UNPLUG_INTERFACE, Unplug),
     { NULL, NULL, NULL }
 };
 
