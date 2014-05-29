@@ -38,7 +38,7 @@
 #include "gnttab.h"
 #include "fdo.h"
 #include "range_set.h"
-#include "pool.h"
+#include "cache.h"
 #include "dbg_print.h"
 #include "assert.h"
 
@@ -66,7 +66,7 @@ struct _XENBUS_GNTTAB_CONTEXT {
     PXENBUS_RANGE_SET           RangeSet;
     ULONG                       Seed;
     LONG                        GetFailed;
-    PXENBUS_POOL                DescriptorPool;
+    PXENBUS_CACHE               DescriptorCache;
     PXENBUS_STORE_INTERFACE     StoreInterface;
     PXENBUS_SUSPEND_INTERFACE   SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK    SuspendCallbackEarly;
@@ -244,7 +244,7 @@ __GnttabFill(
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    status = PoolInitialize(Context->StoreInterface,
+    status = CacheInitialize(Context->StoreInterface,
                             "gnttab",
                             sizeof (XENBUS_GNTTAB_DESCRIPTOR),
                             GNTTAB_RESERVATION,
@@ -253,7 +253,7 @@ __GnttabFill(
                             GnttabAcquireLock,
                             GnttabReleaseLock,
                             Context,
-                            &Context->DescriptorPool);
+                            &Context->DescriptorCache);
     if (!NT_SUCCESS(status))
         goto fail2;
 
@@ -278,8 +278,8 @@ __GnttabEmpty(
 {
     LONGLONG                    Entry;
 
-    PoolTeardown(Context->DescriptorPool);
-    Context->DescriptorPool = NULL;
+    CacheTeardown(Context->DescriptorCache);
+    Context->DescriptorCache = NULL;
 
     for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
          Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
@@ -301,7 +301,7 @@ GnttabGet(
 {
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor;
 
-    Descriptor = PoolGet(Context->DescriptorPool, FALSE);
+    Descriptor = CacheGet(Context->DescriptorCache, FALSE);
 
     if (Descriptor == NULL)
         (VOID) InterlockedIncrement(&Context->GetFailed);
@@ -319,7 +319,7 @@ GnttabPut(
 {
     ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
 
-    PoolPut(Context->DescriptorPool, Descriptor, FALSE);
+    CachePut(Context->DescriptorCache, Descriptor, FALSE);
 }
 
 static FORCEINLINE NTSTATUS
@@ -525,7 +525,7 @@ GnttabDebugCallback(
     )
 {
     PXENBUS_GNTTAB_CONTEXT  Context = Argument;
-    XENBUS_POOL_STATISTICS  Statistics;
+    XENBUS_CACHE_STATISTICS  Statistics;
 
     UNREFERENCED_PARAMETER(Crashing);
 
@@ -541,20 +541,20 @@ GnttabDebugCallback(
           "FrameCount = %u\n",
           Context->FrameCount);
 
-    PoolGetStatistics(Context->DescriptorPool,
-                      &Statistics);
+    CacheGetStatistics(Context->DescriptorCache,
+                       &Statistics);
 
     DEBUG(Printf,
           Context->DebugInterface,
           Context->DebugCallback,
-          "DESCRIPTOR POOL: Allocated = %u (Maximum = %u)\n",
+          "DESCRIPTOR CACHE: Allocated = %u (Maximum = %u)\n",
           Statistics.Allocated,
           Statistics.MaximumAllocated);
 
     DEBUG(Printf,
           Context->DebugInterface,
           Context->DebugCallback,
-          "DESCRIPTOR POOL: Population = %u (Minimum = %u)\n",
+          "DESCRIPTOR CACHE: Population = %u (Minimum = %u)\n",
           Statistics.Population,
           Statistics.MinimumPopulation);
 

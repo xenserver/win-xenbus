@@ -29,16 +29,16 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _XENBUS_POOL_H
-#define _XENBUS_POOL_H
+#ifndef _XENBUS_CACHE_H
+#define _XENBUS_CACHE_H
 
 #include <ntddk.h>
 #include <store_interface.h>
 
-typedef struct _XENBUS_POOL XENBUS_POOL, *PXENBUS_POOL;
+typedef struct _XENBUS_CACHE XENBUS_CACHE, *PXENBUS_CACHE;
 
 extern NTSTATUS
-PoolInitialize(
+CacheInitialize(
     IN  PXENBUS_STORE_INTERFACE StoreInterface,
     IN  const CHAR              *Name,
     IN  ULONG                   Size,
@@ -48,38 +48,38 @@ PoolInitialize(
     IN  VOID                    (*AcquireLock)(PVOID),
     IN  VOID                    (*ReleaseLock)(PVOID),
     IN  PVOID                   Argument,
-    OUT PXENBUS_POOL            *Pool
+    OUT PXENBUS_CACHE           *Cache
     );
 
 extern VOID
-PoolTeardown(
-    IN  PXENBUS_POOL    Pool
+CacheTeardown(
+    IN  PXENBUS_CACHE   Cache
     );
 
 extern PVOID
-PoolGet(
-    IN  PXENBUS_POOL    Pool,
+CacheGet(
+    IN  PXENBUS_CACHE   Cache,
     IN  BOOLEAN         Locked
     );
 
 extern VOID
-PoolPut(
-    IN  PXENBUS_POOL    Pool,
+CachePut(
+    IN  PXENBUS_CACHE   Cache,
     IN  PVOID           Object,
     IN  BOOLEAN         Locked
     );
 
-typedef struct _XENBUS_POOL_STATISTICS {
+typedef struct _XENBUS_CACHE_STATISTICS {
     ULONG   Allocated;
     ULONG   MaximumAllocated;
     ULONG   Population;
     ULONG   MinimumPopulation;
-} XENBUS_POOL_STATISTICS, *PXENBUS_POOL_STATISTICS;
+} XENBUS_CACHE_STATISTICS, *PXENBUS_CACHE_STATISTICS;
 
 extern VOID
-PoolGetStatistics(
-    IN  PXENBUS_POOL            Pool,
-    OUT PXENBUS_POOL_STATISTICS Statistics
+CacheGetStatistics(
+    IN  PXENBUS_CACHE            Cache,
+    OUT PXENBUS_CACHE_STATISTICS Statistics
     );
 
-#endif  // _XENBUS_POOL_H
+#endif  // _XENBUS_CACHE_H

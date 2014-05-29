@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <util.h>
 
-#include "pool.h"
+#include "cache.h"
 #include "dbg_print.h"
 #include "assert.h"
 
@@ -44,7 +44,7 @@ RtlRandomEx (
     __inout PULONG Seed
     );
 
-#define POOL_POOL   'OBJE'
+#define CACHE_TAG   'HCAC'
 
 typedef struct _OBJECT_HEADER {
     ULONG       Magic;
@@ -56,19 +56,19 @@ typedef struct _OBJECT_HEADER {
 
 #define MAXIMUM_SLOTS   6
 
-typedef struct _POOL_MAGAZINE {
+typedef struct _CACHE_MAGAZINE {
     PVOID   Slot[MAXIMUM_SLOTS];
-} POOL_MAGAZINE, *PPOOL_MAGAZINE;
+} CACHE_MAGAZINE, *PCACHE_MAGAZINE;
 
-typedef struct _POOL_FIST {
+typedef struct _CACHE_FIST {
     LONG    Defer;
     ULONG   Probability;
     ULONG   Seed;
-} POOL_FIST, *PPOOL_FIST;
+} CACHE_FIST, *PCACHE_FIST;
 
 #define MAXNAMELEN  128
 
-struct _XENBUS_POOL {
+struct _XENBUS_CACHE {
     CHAR            Name[MAXNAMELEN];
     ULONG           Size;
     ULONG           Reservation;
@@ -81,33 +81,33 @@ struct _XENBUS_POOL {
     KDPC            Dpc;
     LIST_ENTRY      GetList;
     PLIST_ENTRY     PutList;
-    POOL_MAGAZINE   Magazine[MAXIMUM_PROCESSORS];
+    CACHE_MAGAZINE  Magazine[MAXIMUM_PROCESSORS];
     LONG            Allocated;
     LONG            MaximumAllocated;
     LONG            Population;
     LONG            MinimumPopulation;
-    POOL_FIST       FIST;
+    CACHE_FIST      FIST;
 };
 
 static FORCEINLINE PVOID
-__PoolAllocate(
+__CacheAllocate(
     IN  ULONG   Length
     )
 {
-    return __AllocateNonPagedPoolWithTag(Length, POOL_POOL);
+    return __AllocateNonPagedPoolWithTag(Length, CACHE_TAG);
 }
 
 static FORCEINLINE VOID
-__PoolFree(
+__CacheFree(
     IN  PVOID   Buffer
     )
 {
-    __FreePoolWithTag(Buffer, POOL_POOL);
+    __FreePoolWithTag(Buffer, CACHE_TAG);
 }
 
 static FORCEINLINE VOID
-__PoolFill(
-    IN  PXENBUS_POOL    Pool,
+__CacheFill(
+    IN  PXENBUS_CACHE   Cache,
     IN  PLIST_ENTRY     List
     )
 {
@@ -124,34 +124,34 @@ __PoolFill(
         Header = CONTAINING_RECORD(List, OBJECT_HEADER, ListEntry);
         ASSERT3U(Header->Magic, ==, OBJECT_HEADER_MAGIC);
 
-        InsertTailList(&Pool->GetList, &Header->ListEntry);
+        InsertTailList(&Cache->GetList, &Header->ListEntry);
 
         List = Next;
     }
 }
 
 static FORCEINLINE VOID
-__PoolSwizzle(
-    IN  PXENBUS_POOL    Pool
+__CacheSwizzle(
+    IN  PXENBUS_CACHE   Cache
     )
 {
     PLIST_ENTRY         List;
 
-    List = InterlockedExchangePointer(&Pool->PutList, NULL);
+    List = InterlockedExchangePointer(&Cache->PutList, NULL);
 
-    __PoolFill(Pool, List);
+    __CacheFill(Cache, List);
 }
 
 static FORCEINLINE NTSTATUS
-__PoolCreateObject(
-    IN  PXENBUS_POOL    Pool,
+__CacheCreateObject(
+    IN  PXENBUS_CACHE   Cache,
     OUT POBJECT_HEADER  *Header
     )
 {
     PVOID               Object;
     NTSTATUS            status;
 
-    (*Header) = __PoolAllocate(sizeof (OBJECT_HEADER) + Pool->Size);
+    (*Header) = __CacheAllocate(sizeof (OBJECT_HEADER) + Cache->Size);
 
     status = STATUS_NO_MEMORY;
     if (*Header == NULL)
@@ -161,7 +161,7 @@ __PoolCreateObject(
 
     Object = (*Header) + 1;
 
-    status = Pool->Ctor(Pool->Argument, Object);
+    status = Cache->Ctor(Cache->Argument, Object);
     if (!NT_SUCCESS(status))
         goto fail2;
 
@@ -173,7 +173,7 @@ fail2:
     (*Header)->Magic = 0;
 
     ASSERT(IsZeroMemory(*Header, sizeof (OBJECT_HEADER)));
-    __PoolFree(*Header);
+    __CacheFree(*Header);
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -182,8 +182,8 @@ fail1:
 }
 
 static FORCEINLINE PVOID
-__PoolGetShared(
-    IN  PXENBUS_POOL    Pool,
+__CacheGetShared(
+    IN  PXENBUS_CACHE   Cache,
     IN  BOOLEAN         Locked
     )
 {
@@ -193,25 +193,25 @@ __PoolGetShared(
     LONG                Allocated;
     NTSTATUS            status;
 
-    Population = InterlockedDecrement(&Pool->Population);
+    Population = InterlockedDecrement(&Cache->Population);
 
     if (Population >= 0) {
         PLIST_ENTRY     ListEntry;
 
         if (!Locked)
-            Pool->AcquireLock(Pool->Argument);
+            Cache->AcquireLock(Cache->Argument);
 
-        if (Population < Pool->MinimumPopulation)
-            Pool->MinimumPopulation = Population;
+        if (Population < Cache->MinimumPopulation)
+            Cache->MinimumPopulation = Population;
 
-        if (IsListEmpty(&Pool->GetList))
-            __PoolSwizzle(Pool);
+        if (IsListEmpty(&Cache->GetList))
+            __CacheSwizzle(Cache);
 
-        ListEntry = RemoveHeadList(&Pool->GetList);
-        ASSERT(ListEntry != &Pool->GetList);
+        ListEntry = RemoveHeadList(&Cache->GetList);
+        ASSERT(ListEntry != &Cache->GetList);
 
         if (!Locked)
-            Pool->ReleaseLock(Pool->Argument);
+            Cache->ReleaseLock(Cache->Argument);
 
         RtlZeroMemory(ListEntry, sizeof (LIST_ENTRY));
 
@@ -221,23 +221,23 @@ __PoolGetShared(
         goto done;
     }
 
-    (VOID) InterlockedIncrement(&Pool->Population);
+    (VOID) InterlockedIncrement(&Cache->Population);
 
-    status = __PoolCreateObject(Pool, &Header);
+    status = __CacheCreateObject(Cache, &Header);
     if (!NT_SUCCESS(status))
         goto fail1;
 
-    Allocated = InterlockedIncrement(&Pool->Allocated);
+    Allocated = InterlockedIncrement(&Cache->Allocated);
 
-    if (Allocated > Pool->MaximumAllocated) {
+    if (Allocated > Cache->MaximumAllocated) {
         if (!Locked)
-            Pool->AcquireLock(Pool->Argument);
+            Cache->AcquireLock(Cache->Argument);
 
-        if (Allocated > Pool->MaximumAllocated)
-            Pool->MaximumAllocated = Allocated;
+        if (Allocated > Cache->MaximumAllocated)
+            Cache->MaximumAllocated = Allocated;
 
         if (!Locked)
-            Pool->ReleaseLock(Pool->Argument);
+            Cache->ReleaseLock(Cache->Argument);
     }
 
 done:
@@ -252,8 +252,8 @@ fail1:
 }
 
 static FORCEINLINE VOID
-__PoolPutShared(
-    IN  PXENBUS_POOL    Pool,
+__CachePutShared(
+    IN  PXENBUS_CACHE   Cache,
     IN  PVOID           Object,
     IN  BOOLEAN         Locked
     )
@@ -274,28 +274,28 @@ __PoolPutShared(
         New = &Header->ListEntry;
 
         do {
-            Old = Pool->PutList;
+            Old = Cache->PutList;
             New->Flink = Old;
-        } while (InterlockedCompareExchangePointer(&Pool->PutList, New, Old) != Old);
+        } while (InterlockedCompareExchangePointer(&Cache->PutList, New, Old) != Old);
     } else {
-        InsertTailList(&Pool->GetList, &Header->ListEntry);
+        InsertTailList(&Cache->GetList, &Header->ListEntry);
     }
 
     KeMemoryBarrier();
 
-    (VOID) InterlockedIncrement(&Pool->Population);
+    (VOID) InterlockedIncrement(&Cache->Population);
 }
 
 static FORCEINLINE PVOID
-__PoolGetMagazine(
-    IN  PXENBUS_POOL    Pool,
+__CacheGetMagazine(
+    IN  PXENBUS_CACHE   Cache,
     IN  ULONG           Cpu
     )
 {
-    PPOOL_MAGAZINE      Magazine;
+    PCACHE_MAGAZINE     Magazine;
     ULONG               Index;
 
-    Magazine = &Pool->Magazine[Cpu];
+    Magazine = &Cache->Magazine[Cpu];
 
     for (Index = 0; Index < MAXIMUM_SLOTS; Index++) {
         PVOID   Object;
@@ -312,16 +312,16 @@ __PoolGetMagazine(
 }
 
 static FORCEINLINE BOOLEAN
-__PoolPutMagazine(
-    IN  PXENBUS_POOL    Pool,
+__CachePutMagazine(
+    IN  PXENBUS_CACHE   Cache,
     IN  ULONG           Cpu,
     IN  PVOID           Object
     )
 {
-    PPOOL_MAGAZINE      Magazine;
+    PCACHE_MAGAZINE      Magazine;
     ULONG               Index;
 
-    Magazine = &Pool->Magazine[Cpu];
+    Magazine = &Cache->Magazine[Cpu];
 
     for (Index = 0; Index < MAXIMUM_SLOTS; Index++) {
         if (Magazine->Slot[Index] == NULL) {
@@ -334,8 +334,8 @@ __PoolPutMagazine(
 }
 
 PVOID
-PoolGet(
-    IN  PXENBUS_POOL    Pool,
+CacheGet(
+    IN  PXENBUS_CACHE   Cache,
     IN  BOOLEAN         Locked
     )
 {
@@ -343,14 +343,14 @@ PoolGet(
     ULONG               Cpu;
     PVOID               Object;
 
-    if (Pool->FIST.Probability != 0) {
+    if (Cache->FIST.Probability != 0) {
         LONG    Defer;
 
-        Defer = InterlockedDecrement(&Pool->FIST.Defer);
+        Defer = InterlockedDecrement(&Cache->FIST.Defer);
 
         if (Defer <= 0) {
-            ULONG   Random = RtlRandomEx(&Pool->FIST.Seed);
-            ULONG   Threshold = (MAXLONG / 100) * Pool->FIST.Probability;
+            ULONG   Random = RtlRandomEx(&Cache->FIST.Seed);
+            ULONG   Threshold = (MAXLONG / 100) * Cache->FIST.Probability;
 
             if (Random < Threshold)
                 return NULL;
@@ -360,9 +360,9 @@ PoolGet(
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
     Cpu = KeGetCurrentProcessorNumber();
 
-    Object = __PoolGetMagazine(Pool, Cpu);
+    Object = __CacheGetMagazine(Cache, Cpu);
     if (Object == NULL)
-        Object = __PoolGetShared(Pool, Locked);
+        Object = __CacheGetShared(Cache, Locked);
 
     KeLowerIrql(Irql);
 
@@ -370,8 +370,8 @@ PoolGet(
 }
 
 VOID
-PoolPut(
-    IN  PXENBUS_POOL    Pool,
+CachePut(
+    IN  PXENBUS_CACHE   Cache,
     IN  PVOID           Object,
     IN  BOOLEAN         Locked
     )
@@ -382,27 +382,27 @@ PoolPut(
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
     Cpu = KeGetCurrentProcessorNumber();
 
-    if (!__PoolPutMagazine(Pool, Cpu, Object))
-        __PoolPutShared(Pool, Object, Locked);
+    if (!__CachePutMagazine(Cache, Cpu, Object))
+        __CachePutShared(Cache, Object, Locked);
 
     KeLowerIrql(Irql);
 }
 
 VOID
-PoolGetStatistics(
-    IN  PXENBUS_POOL            Pool,
-    OUT PXENBUS_POOL_STATISTICS Statistics
+CacheGetStatistics(
+    IN  PXENBUS_CACHE            Cache,
+    OUT PXENBUS_CACHE_STATISTICS Statistics
     )
 {
-    Statistics->Allocated = Pool->Allocated;
-    Statistics->MaximumAllocated = Pool->MaximumAllocated;
-    Statistics->Population = Pool->Population;
-    Statistics->MinimumPopulation = Pool->MinimumPopulation;
+    Statistics->Allocated = Cache->Allocated;
+    Statistics->MaximumAllocated = Cache->MaximumAllocated;
+    Statistics->Population = Cache->Population;
+    Statistics->MinimumPopulation = Cache->MinimumPopulation;
 }
 
 static FORCEINLINE
-__PoolFlushMagazines(
-    IN  PXENBUS_POOL    Pool
+__CacheFlushMagazines(
+    IN  PXENBUS_CACHE   Cache
     )
 {
     ULONG               Cpu;
@@ -410,53 +410,53 @@ __PoolFlushMagazines(
     for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++) {
         PVOID   Object;
 
-        while ((Object = __PoolGetMagazine(Pool, Cpu)) != NULL)
-            __PoolPutShared(Pool, Object, TRUE);
+        while ((Object = __CacheGetMagazine(Cache, Cpu)) != NULL)
+            __CachePutShared(Cache, Object, TRUE);
     }
 }
 
 static FORCEINLINE VOID
-__PoolTrimShared(
-    IN      PXENBUS_POOL    Pool,
+__CacheTrimShared(
+    IN      PXENBUS_CACHE   Cache,
     IN OUT  PLIST_ENTRY     List
     )
 {
     LONG                    Population;
     LONG                    Excess;
 
-    Population = Pool->Population;
+    Population = Cache->Population;
 
     KeMemoryBarrier();
 
-    Excess = __max((LONG)Pool->MinimumPopulation - (LONG)Pool->Reservation, 0);
+    Excess = __max((LONG)Cache->MinimumPopulation - (LONG)Cache->Reservation, 0);
     
     while (Excess != 0) {
         PLIST_ENTRY     ListEntry;
 
-        Population = InterlockedDecrement(&Pool->Population);
+        Population = InterlockedDecrement(&Cache->Population);
         if (Population < 0) {
-            Population = InterlockedIncrement(&Pool->Population);
+            Population = InterlockedIncrement(&Cache->Population);
             break;
         }
 
-        if (IsListEmpty(&Pool->GetList))
-            __PoolSwizzle(Pool);
+        if (IsListEmpty(&Cache->GetList))
+            __CacheSwizzle(Cache);
 
-        ListEntry = RemoveHeadList(&Pool->GetList);
-        ASSERT(ListEntry != &Pool->GetList);
+        ListEntry = RemoveHeadList(&Cache->GetList);
+        ASSERT(ListEntry != &Cache->GetList);
 
         InsertTailList(List, ListEntry);
 
-        InterlockedDecrement(&Pool->Allocated);
+        InterlockedDecrement(&Cache->Allocated);
         --Excess;
     }
 
-    Pool->MinimumPopulation = Population;
+    Cache->MinimumPopulation = Population;
 }
 
 static FORCEINLINE VOID
-__PoolDestroyObject(
-    IN  PXENBUS_POOL    Pool,
+__CacheDestroyObject(
+    IN  PXENBUS_CACHE   Cache,
     IN  POBJECT_HEADER  Header
     )
 {
@@ -464,17 +464,17 @@ __PoolDestroyObject(
 
     Object = Header + 1;
 
-    Pool->Dtor(Pool->Argument, Object);
+    Cache->Dtor(Cache->Argument, Object);
 
     Header->Magic = 0;
 
     ASSERT(IsZeroMemory(Header, sizeof (OBJECT_HEADER)));
-    __PoolFree(Header);
+    __CacheFree(Header);
 }
 
 static FORCEINLINE VOID
-__PoolEmpty(
-    IN      PXENBUS_POOL    Pool,
+__CacheEmpty(
+    IN      PXENBUS_CACHE   Cache,
     IN OUT  PLIST_ENTRY     List
     )
 {
@@ -488,7 +488,7 @@ __PoolEmpty(
         Header = CONTAINING_RECORD(ListEntry, OBJECT_HEADER, ListEntry);
         ASSERT3U(Header->Magic, ==, OBJECT_HEADER_MAGIC);
 
-        __PoolDestroyObject(Pool, Header);
+        __CacheDestroyObject(Cache, Header);
     }
 }
 
@@ -496,52 +496,52 @@ __PoolEmpty(
 #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
 #define TIME_RELATIVE(_t)   (-(_t))
 
-#define POOL_PERIOD  1000
+#define CACHE_PERIOD  1000
 
-KDEFERRED_ROUTINE   PoolDpc;
+KDEFERRED_ROUTINE   CacheDpc;
 
 VOID
-PoolDpc(
+CacheDpc(
     IN  PKDPC       Dpc,
     IN  PVOID       Context,
     IN  PVOID       Argument1,
     IN  PVOID       Argument2
     )
 {
-    PXENBUS_POOL    Pool = Context;
+    PXENBUS_CACHE   Cache = Context;
     LIST_ENTRY      List;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Argument1);
     UNREFERENCED_PARAMETER(Argument2);
 
-    ASSERT(Pool != NULL);
+    ASSERT(Cache != NULL);
 
     InitializeListHead(&List);
 
-    Pool->AcquireLock(Pool->Argument);
-    __PoolTrimShared(Pool, &List);
-    Pool->ReleaseLock(Pool->Argument);
+    Cache->AcquireLock(Cache->Argument);
+    __CacheTrimShared(Cache, &List);
+    Cache->ReleaseLock(Cache->Argument);
 
-    __PoolEmpty(Pool, &List);
+    __CacheEmpty(Cache, &List);
     ASSERT(IsListEmpty(&List));
 }
 
 static FORCEINLINE VOID
-__PoolSetupFIST(
-    IN  PXENBUS_POOL            Pool,
+__CacheSetupFIST(
+    IN  PXENBUS_CACHE           Cache,
     IN  PXENBUS_STORE_INTERFACE StoreInterface
     )
 {
-    CHAR                        Node[sizeof ("fist/pool/") + MAXNAMELEN];
+    CHAR                        Node[sizeof ("fist/cache/") + MAXNAMELEN];
     PCHAR                       Buffer;
     LARGE_INTEGER               Now;
     NTSTATUS                    status;
 
     status = RtlStringCbPrintfA(Node,
                                 sizeof (Node),
-                                "fist/pool/%s",
-                                Pool->Name);
+                                "fist/cache/%s",
+                                Cache->Name);
     ASSERT(NT_SUCCESS(status));
 
     status = STORE(Read,
@@ -551,9 +551,9 @@ __PoolSetupFIST(
                    "defer",
                    &Buffer);
     if (!NT_SUCCESS(status)) {
-        Pool->FIST.Defer = 0;
+        Cache->FIST.Defer = 0;
     } else {
-        Pool->FIST.Defer = (ULONG)strtol(Buffer, NULL, 0);
+        Cache->FIST.Defer = (ULONG)strtol(Buffer, NULL, 0);
 
         STORE(Free,
               StoreInterface,
@@ -567,30 +567,30 @@ __PoolSetupFIST(
                    "probability",
                    &Buffer);
     if (!NT_SUCCESS(status)) {
-        Pool->FIST.Probability = 0;
+        Cache->FIST.Probability = 0;
     } else {
-        Pool->FIST.Probability = (ULONG)strtol(Buffer, NULL, 0);
+        Cache->FIST.Probability = (ULONG)strtol(Buffer, NULL, 0);
 
         STORE(Free,
               StoreInterface,
               Buffer);
     }
 
-    if (Pool->FIST.Probability > 100)
-        Pool->FIST.Probability = 100;
+    if (Cache->FIST.Probability > 100)
+        Cache->FIST.Probability = 100;
 
-    if (Pool->FIST.Probability != 0)
+    if (Cache->FIST.Probability != 0)
         Info("%s: Defer = %d Probability = %d\n",
-             Pool->Name,
-             Pool->FIST.Defer,
-             Pool->FIST.Probability);
+             Cache->Name,
+             Cache->FIST.Defer,
+             Cache->FIST.Probability);
 
     KeQuerySystemTime(&Now);
-    Pool->FIST.Seed = Now.LowPart;
+    Cache->FIST.Seed = Now.LowPart;
 }
 
 NTSTATUS
-PoolInitialize(
+CacheInitialize(
     IN  PXENBUS_STORE_INTERFACE StoreInterface,
     IN  const CHAR              *Name,
     IN  ULONG                   Size,
@@ -600,65 +600,65 @@ PoolInitialize(
     IN  VOID                    (*AcquireLock)(PVOID),
     IN  VOID                    (*ReleaseLock)(PVOID),
     IN  PVOID                   Argument,
-    OUT PXENBUS_POOL            *Pool
+    OUT PXENBUS_CACHE           *Cache
     )
 {
     LARGE_INTEGER               Timeout;
     LIST_ENTRY                  List;
     NTSTATUS                    status;
 
-    *Pool = __PoolAllocate(sizeof (XENBUS_POOL));
+    *Cache = __CacheAllocate(sizeof (XENBUS_CACHE));
 
     status = STATUS_NO_MEMORY;
-    if (*Pool == NULL)
+    if (*Cache == NULL)
         goto fail1;
 
-    status = RtlStringCbPrintfA((*Pool)->Name,
-                                sizeof ((*Pool)->Name),
+    status = RtlStringCbPrintfA((*Cache)->Name,
+                                sizeof ((*Cache)->Name),
                                 "%s",
                                 Name);
     if (!NT_SUCCESS(status))
         goto fail2;
 
-    (*Pool)->Size = Size;
-    (*Pool)->Ctor = Ctor;
-    (*Pool)->Dtor = Dtor;
-    (*Pool)->AcquireLock = AcquireLock;
-    (*Pool)->ReleaseLock = ReleaseLock;
-    (*Pool)->Argument = Argument;
+    (*Cache)->Size = Size;
+    (*Cache)->Ctor = Ctor;
+    (*Cache)->Dtor = Dtor;
+    (*Cache)->AcquireLock = AcquireLock;
+    (*Cache)->ReleaseLock = ReleaseLock;
+    (*Cache)->Argument = Argument;
 
-    __PoolSetupFIST(*Pool, StoreInterface);
+    __CacheSetupFIST(*Cache, StoreInterface);
 
-    InitializeListHead(&(*Pool)->GetList);
+    InitializeListHead(&(*Cache)->GetList);
 
     while (Reservation != 0) {
         POBJECT_HEADER  Header;
 
-        status = __PoolCreateObject(*Pool, &Header);
+        status = __CacheCreateObject(*Cache, &Header);
         if (!NT_SUCCESS(status))
             goto fail3;
 
-        (VOID) InterlockedIncrement(&(*Pool)->Allocated);
+        (VOID) InterlockedIncrement(&(*Cache)->Allocated);
 
-        InsertTailList(&(*Pool)->GetList, &Header->ListEntry);
-        (VOID) InterlockedIncrement(&(*Pool)->Population);
+        InsertTailList(&(*Cache)->GetList, &Header->ListEntry);
+        (VOID) InterlockedIncrement(&(*Cache)->Population);
 
         --Reservation;
     }
-    (*Pool)->MaximumAllocated = (*Pool)->Allocated;
-    (*Pool)->Reservation = (*Pool)->Population;
+    (*Cache)->MaximumAllocated = (*Cache)->Allocated;
+    (*Cache)->Reservation = (*Cache)->Population;
 
-    KeInitializeDpc(&(*Pool)->Dpc,
-                    PoolDpc,
-                    (*Pool));
+    KeInitializeDpc(&(*Cache)->Dpc,
+                    CacheDpc,
+                    (*Cache));
 
-    Timeout.QuadPart = TIME_RELATIVE(TIME_MS(POOL_PERIOD));
+    Timeout.QuadPart = TIME_RELATIVE(TIME_MS(CACHE_PERIOD));
 
-    KeInitializeTimer(&(*Pool)->Timer);
-    KeSetTimerEx(&(*Pool)->Timer,
+    KeInitializeTimer(&(*Cache)->Timer);
+    KeSetTimerEx(&(*Cache)->Timer,
                  Timeout,
-                 POOL_PERIOD,
-                 &(*Pool)->Dpc);
+                 CACHE_PERIOD,
+                 &(*Cache)->Dpc);
 
     return STATUS_SUCCESS;
 
@@ -667,31 +667,31 @@ fail3:
 
     InitializeListHead(&List);
 
-    (*Pool)->MinimumPopulation = (*Pool)->Population;
-    __PoolTrimShared(*Pool, &List);
-    __PoolEmpty(*Pool, &List);
+    (*Cache)->MinimumPopulation = (*Cache)->Population;
+    __CacheTrimShared(*Cache, &List);
+    __CacheEmpty(*Cache, &List);
 
-    ASSERT3U((*Pool)->Population, ==, 0);
-    ASSERT3U((*Pool)->Allocated, ==, 0);
+    ASSERT3U((*Cache)->Population, ==, 0);
+    ASSERT3U((*Cache)->Allocated, ==, 0);
 
-    RtlZeroMemory(&(*Pool)->GetList, sizeof (LIST_ENTRY));
+    RtlZeroMemory(&(*Cache)->GetList, sizeof (LIST_ENTRY));
 
-    RtlZeroMemory(&(*Pool)->FIST, sizeof (POOL_FIST));
+    RtlZeroMemory(&(*Cache)->FIST, sizeof (CACHE_FIST));
 
-    (*Pool)->Argument = NULL;
-    (*Pool)->ReleaseLock = NULL;
-    (*Pool)->AcquireLock = NULL;
-    (*Pool)->Dtor = NULL;
-    (*Pool)->Ctor = NULL;
-    (*Pool)->Size = 0;
+    (*Cache)->Argument = NULL;
+    (*Cache)->ReleaseLock = NULL;
+    (*Cache)->AcquireLock = NULL;
+    (*Cache)->Dtor = NULL;
+    (*Cache)->Ctor = NULL;
+    (*Cache)->Size = 0;
 
 fail2:
     Error("fail2\n");
 
-    RtlZeroMemory((*Pool)->Name, sizeof ((*Pool)->Name));
+    RtlZeroMemory((*Cache)->Name, sizeof ((*Cache)->Name));
     
-    ASSERT(IsZeroMemory(*Pool, sizeof (XENBUS_POOL)));
-    __PoolFree(*Pool);
+    ASSERT(IsZeroMemory(*Cache, sizeof (XENBUS_CACHE)));
+    __CacheFree(*Cache);
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -700,45 +700,45 @@ fail1:
 }
 
 VOID
-PoolTeardown(
-    IN  PXENBUS_POOL    Pool
+CacheTeardown(
+    IN  PXENBUS_CACHE   Cache
     )
 {
     LIST_ENTRY          List;
 
-    KeCancelTimer(&Pool->Timer);
+    KeCancelTimer(&Cache->Timer);
     KeFlushQueuedDpcs();
 
-    RtlZeroMemory(&Pool->Timer, sizeof (KTIMER));
-    RtlZeroMemory(&Pool->Dpc, sizeof (KDPC));
+    RtlZeroMemory(&Cache->Timer, sizeof (KTIMER));
+    RtlZeroMemory(&Cache->Dpc, sizeof (KDPC));
 
-    Pool->Reservation = 0;
-    Pool->MaximumAllocated = 0;
+    Cache->Reservation = 0;
+    Cache->MaximumAllocated = 0;
 
     InitializeListHead(&List);
 
-    __PoolFlushMagazines(Pool);
+    __CacheFlushMagazines(Cache);
 
-    Pool->MinimumPopulation = Pool->Population;
-    __PoolTrimShared(Pool, &List);
-    __PoolEmpty(Pool, &List);
+    Cache->MinimumPopulation = Cache->Population;
+    __CacheTrimShared(Cache, &List);
+    __CacheEmpty(Cache, &List);
 
-    ASSERT3U(Pool->Population, ==, 0);
-    ASSERT3U(Pool->Allocated, ==, 0);
+    ASSERT3U(Cache->Population, ==, 0);
+    ASSERT3U(Cache->Allocated, ==, 0);
 
-    RtlZeroMemory(&Pool->GetList, sizeof (LIST_ENTRY));
+    RtlZeroMemory(&Cache->GetList, sizeof (LIST_ENTRY));
 
-    RtlZeroMemory(&Pool->FIST, sizeof (POOL_FIST));
+    RtlZeroMemory(&Cache->FIST, sizeof (CACHE_FIST));
 
-    Pool->Argument = NULL;
-    Pool->ReleaseLock = NULL;
-    Pool->AcquireLock = NULL;
-    Pool->Dtor = NULL;
-    Pool->Ctor = NULL;
-    Pool->Size = 0;
+    Cache->Argument = NULL;
+    Cache->ReleaseLock = NULL;
+    Cache->AcquireLock = NULL;
+    Cache->Dtor = NULL;
+    Cache->Ctor = NULL;
+    Cache->Size = 0;
 
-    RtlZeroMemory(Pool->Name, sizeof (Pool->Name));
+    RtlZeroMemory(Cache->Name, sizeof (Cache->Name));
 
-    ASSERT(IsZeroMemory(Pool, sizeof (XENBUS_POOL)));
-    __PoolFree(Pool);
+    ASSERT(IsZeroMemory(Cache, sizeof (XENBUS_CACHE)));
+    __CacheFree(Cache);
 }
