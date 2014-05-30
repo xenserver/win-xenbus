@@ -30,7 +30,7 @@
  */
 
 #include <ntddk.h>
-#include <stdarg.h>
+#include <ntstrsafe.h>
 #include <stdlib.h>
 #include <xen.h>
 #include <util.h>
@@ -50,6 +50,17 @@
 
 #define GNTTAB_DESCRIPTOR_MAGIC 'DTNG'
 
+#define MAXNAMELEN  128
+
+struct _XENBUS_GNTTAB_CACHE {
+    PXENBUS_GNTTAB_CONTEXT  Context;
+    CHAR                    Name[MAXNAMELEN];
+    VOID                    (*AcquireLock)(PVOID);
+    VOID                    (*ReleaseLock)(PVOID);
+    PVOID                   Argument;
+    PXENBUS_CACHE           Cache;
+};
+
 struct _XENBUS_GNTTAB_DESCRIPTOR {
     ULONG               Magic;
     ULONG               Reference;
@@ -61,12 +72,8 @@ struct _XENBUS_GNTTAB_CONTEXT {
     PFN_NUMBER                  Pfn;
     ULONG                       FrameCount;
     grant_entry_v1_t            *Entry;
-    KSPIN_LOCK                  Lock;
     PXENBUS_RANGE_SET           RangeSet;
-    ULONG                       Seed;
-    LONG                        GetFailed;
     PXENBUS_CACHE_INTERFACE     CacheInterface;
-    PXENBUS_CACHE               Cache;
     PXENBUS_SUSPEND_INTERFACE   SuspendInterface;
     PXENBUS_SUSPEND_CALLBACK    SuspendCallbackEarly;
     PXENBUS_DEBUG_INTERFACE     DebugInterface;
@@ -133,13 +140,33 @@ fail1:
     return status;
 }
 
+static FORCEINLINE VOID
+__GnttabShrink(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    )
+{
+    LONGLONG                    Entry;
+
+    for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
+         Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
+         Entry++) {
+        NTSTATUS    status;
+
+        status = RangeSetGet(Context->RangeSet, Entry);
+        ASSERT(NT_SUCCESS(status));
+    }
+
+    Context->FrameCount = 0;
+}
+
 static NTSTATUS
 GnttabDescriptorCtor(
     IN  PVOID                   Argument,
     IN  PVOID                   Object
     )
 {
-    PXENBUS_GNTTAB_CONTEXT      Context = Argument;
+    PXENBUS_GNTTAB_CACHE        Cache = Argument;
+    PXENBUS_GNTTAB_CONTEXT      Context = Cache->Context;
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
     LONGLONG                    Reference;
     NTSTATUS                    status;
@@ -159,9 +186,6 @@ done:
     Descriptor->Magic = GNTTAB_DESCRIPTOR_MAGIC;
     Descriptor->Reference = (ULONG)Reference;
 
-    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
-    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
-
     return STATUS_SUCCESS;
 
 fail2:
@@ -179,11 +203,10 @@ GnttabDescriptorDtor(
     IN  PVOID                   Object
     )
 {
-    PXENBUS_GNTTAB_CONTEXT      Context = Argument;
+    PXENBUS_GNTTAB_CACHE        Cache = Argument;
+    PXENBUS_GNTTAB_CONTEXT      Context = Cache->Context;
     PXENBUS_GNTTAB_DESCRIPTOR   Descriptor = Object;
     NTSTATUS                    status;
-
-    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
 
     status = RangeSetPut(Context->RangeSet,
                          (LONGLONG)Descriptor->Reference,
@@ -191,79 +214,90 @@ GnttabDescriptorDtor(
     ASSERT(NT_SUCCESS(status));
 }
 
-static FORCEINLINE VOID
-__drv_requiresIRQL(DISPATCH_LEVEL)
-__GnttabAcquireLock(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
-    )
-{
-    ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
-
-    KeAcquireSpinLockAtDpcLevel(&Context->Lock);
-}
-
-static DECLSPEC_NOINLINE VOID
+static VOID
 GnttabAcquireLock(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    IN  PVOID                   Argument
     )
 {
-    __GnttabAcquireLock(Context);
+    PXENBUS_GNTTAB_CACHE        Cache = Argument;
+
+    Cache->AcquireLock(Cache->Argument);
 }
 
-static FORCEINLINE VOID
-__drv_requiresIRQL(DISPATCH_LEVEL)
-__GnttabReleaseLock(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
-    )
-{
-    ASSERT3U(KeGetCurrentIrql(), ==, DISPATCH_LEVEL);
-
-#pragma prefast(disable:26110)
-    KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-}
-
-static DECLSPEC_NOINLINE VOID
+static VOID
 GnttabReleaseLock(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
+    IN  PVOID                   Argument
     )
 {
-    __GnttabReleaseLock(Context);
+    PXENBUS_GNTTAB_CACHE        Cache = Argument;
+
+    Cache->ReleaseLock(Cache->Argument);
 }
 
-#define GNTTAB_RESERVATION  32
-
-static FORCEINLINE NTSTATUS
-__GnttabFill(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
+static NTSTATUS
+GnttabCreateCache(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context,
+    IN  const CHAR              *Name,
+    IN  ULONG                   Reservation,
+    IN  VOID                    (*AcquireLock)(PVOID),
+    IN  VOID                    (*ReleaseLock)(PVOID),
+    IN  PVOID                   Argument,
+    OUT PXENBUS_GNTTAB_CACHE    *Cache
     )
 {
     NTSTATUS                    status;
 
-    status = RangeSetInitialize(&Context->RangeSet);
-    if (!NT_SUCCESS(status))
+    *Cache = __GnttabAllocate(sizeof (XENBUS_GNTTAB_CACHE));
+
+    status = STATUS_NO_MEMORY;
+    if (*Cache == NULL)
         goto fail1;
+
+    (*Cache)->Context = Context;
+
+    status = RtlStringCbPrintfA((*Cache)->Name,
+                                sizeof ((*Cache)->Name),
+                                "%s_gnttab",
+                                Name);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    (*Cache)->AcquireLock = AcquireLock;
+    (*Cache)->ReleaseLock = ReleaseLock;
+    (*Cache)->Argument = Argument;
 
     status = CACHE(Create,
                    Context->CacheInterface,
-                   "gnttab",
+                   (*Cache)->Name,
                    sizeof (XENBUS_GNTTAB_DESCRIPTOR),
-                   GNTTAB_RESERVATION,
+                   Reservation,
                    GnttabDescriptorCtor,
                    GnttabDescriptorDtor,
                    GnttabAcquireLock,
                    GnttabReleaseLock,
-                   Context,
-                   &Context->Cache);
+                   *Cache,
+                   &(*Cache)->Cache);
     if (!NT_SUCCESS(status))
-        goto fail2;
+        goto fail3;
 
     return STATUS_SUCCESS;
 
+fail3:
+    Error("fail3\n");
+
+    (*Cache)->Argument = NULL;
+    (*Cache)->ReleaseLock = NULL;
+    (*Cache)->AcquireLock = NULL;
+
+    RtlZeroMemory((*Cache)->Name, sizeof ((*Cache)->Name));
+    
 fail2:
     Error("fail2\n");
 
-    RangeSetTeardown(Context->RangeSet);
-    Context->RangeSet = NULL;
+    (*Cache)->Context = NULL;
+
+    ASSERT(IsZeroMemory(*Cache, sizeof (XENBUS_GNTTAB_CACHE)));
+    __GnttabFree(*Cache);
 
 fail1:
     Error("fail1 (%08x)\n", status);
@@ -271,127 +305,70 @@ fail1:
     return status;
 }
 
-static FORCEINLINE VOID
-__GnttabEmpty(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
+static VOID
+GnttabDestroyCache(
+    IN  PXENBUS_GNTTAB_CONTEXT  Context,
+    IN  PXENBUS_GNTTAB_CACHE    Cache
     )
 {
-    LONGLONG                    Entry;
-
     CACHE(Destroy,
           Context->CacheInterface,
-          Context->Cache);
-    Context->Cache = NULL;
+          Cache->Cache);
+    Cache->Cache = NULL;
 
-    for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
-         Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
-         Entry++) {
-        NTSTATUS    status;
+    Cache->Argument = NULL;
+    Cache->ReleaseLock = NULL;
+    Cache->AcquireLock = NULL;
 
-        status = RangeSetGet(Context->RangeSet, Entry);
-        ASSERT(NT_SUCCESS(status));
-    }
+    RtlZeroMemory(Cache->Name, sizeof (Cache->Name));
+    
+    Cache->Context = NULL;
 
-    RangeSetTeardown(Context->RangeSet);
-    Context->RangeSet = NULL;
+    ASSERT(IsZeroMemory(Cache, sizeof (XENBUS_GNTTAB_CACHE)));
+    __GnttabFree(Cache);
 }
 
-static PXENBUS_GNTTAB_DESCRIPTOR
-GnttabGet(
-    IN  PXENBUS_GNTTAB_CONTEXT  Context
-    )
-{
-    PXENBUS_GNTTAB_DESCRIPTOR   Descriptor;
-
-    Descriptor = CACHE(Get,
-                       Context->CacheInterface,
-                       Context->Cache,
-                       FALSE);
-
-    if (Descriptor == NULL)
-        (VOID) InterlockedIncrement(&Context->GetFailed);
-    else
-        ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
-
-    return Descriptor;
-}
-
-static VOID
-GnttabPut(
+static NTSTATUS
+GnttabPermitForeignAccess( 
     IN  PXENBUS_GNTTAB_CONTEXT      Context,
-    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
-    )
-{
-    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
-
-    CACHE(Put,
-          Context->CacheInterface,
-          Context->Cache,
-          Descriptor,
-          FALSE);
-}
-
-static FORCEINLINE NTSTATUS
-__GnttabPermitForeignAccessFullPage( 
-    IN  PXENBUS_GNTTAB_CONTEXT      Context,
-    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor,
+    IN  PXENBUS_GNTTAB_CACHE        Cache,
+    IN  BOOLEAN                     Locked,
     IN  USHORT                      Domain,
-    IN  va_list                     Arguments
+    IN  PFN_NUMBER                  Pfn,
+    IN  BOOLEAN                     ReadOnly,
+    OUT PXENBUS_GNTTAB_DESCRIPTOR   *Descriptor
     )
 {
-    PFN_NUMBER                      Frame;
-    BOOLEAN                         ReadOnly;
     grant_entry_v1_t                *Entry;
+    NTSTATUS                        status;
 
-    Frame = va_arg(Arguments, PFN_NUMBER);
-    ReadOnly = va_arg(Arguments, BOOLEAN);
+    *Descriptor = CACHE(Get,
+                        Context->CacheInterface,
+                        Cache->Cache,
+                        Locked);
 
-    ASSERT(IsZeroMemory(&Descriptor->Entry, sizeof (grant_entry_v1_t)));
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    if (*Descriptor == NULL)
+        goto fail1;
 
-    Descriptor->Entry.flags = (ReadOnly) ? GTF_readonly : 0;
-    Descriptor->Entry.domid = Domain;
+    (*Descriptor)->Entry.flags = (ReadOnly) ? GTF_readonly : 0;
+    (*Descriptor)->Entry.domid = Domain;
 
-    Descriptor->Entry.frame = (uint32_t)Frame;
-    ASSERT3U(Descriptor->Entry.frame, ==, Frame);
+    (*Descriptor)->Entry.frame = (uint32_t)Pfn;
+    ASSERT3U((*Descriptor)->Entry.frame, ==, Pfn);
 
-    Entry = &Context->Entry[Descriptor->Reference];
+    Entry = &Context->Entry[(*Descriptor)->Reference];
 
-    *Entry = Descriptor->Entry;
+    *Entry = (*Descriptor)->Entry;
     KeMemoryBarrier();
 
     Entry->flags |= GTF_permit_access;
     KeMemoryBarrier();
 
     return STATUS_SUCCESS;
-}
 
-static NTSTATUS
-GnttabPermitForeignAccess(
-    IN  PXENBUS_GNTTAB_CONTEXT      Context,
-    IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor,
-    IN  USHORT                      Domain,
-    IN  XENBUS_GNTTAB_ENTRY_TYPE    Type,
-    ...
-    )
-{
-    va_list                         Arguments;
-    NTSTATUS                        status;
-
-    ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
-    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
-    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
-
-    va_start(Arguments, Type);
-    switch (Type) {
-    case GNTTAB_ENTRY_FULL_PAGE:
-        status =__GnttabPermitForeignAccessFullPage(Context, Descriptor, Domain, Arguments);
-        break;
-
-    default:
-        status = STATUS_NOT_SUPPORTED;
-        break;
-    }
-    va_end(Arguments);
+fail1:
+    Error("fail1 (%08x)\n", status);
 
     return status;
 }
@@ -399,6 +376,8 @@ GnttabPermitForeignAccess(
 static NTSTATUS
 GnttabRevokeForeignAccess(
     IN  PXENBUS_GNTTAB_CONTEXT      Context,
+    IN  PXENBUS_GNTTAB_CACHE        Cache,
+    IN  BOOLEAN                     Locked,
     IN  PXENBUS_GNTTAB_DESCRIPTOR   Descriptor
     )
 {
@@ -437,6 +416,12 @@ GnttabRevokeForeignAccess(
     RtlZeroMemory(Entry, sizeof (grant_entry_v1_t));
     RtlZeroMemory(&Descriptor->Entry, sizeof (grant_entry_v1_t));
 
+    CACHE(Put,
+          Context->CacheInterface,
+          Cache->Cache,
+          Descriptor,
+          Locked);
+
     return STATUS_SUCCESS;
 
 fail1:
@@ -454,8 +439,6 @@ GnttabReference(
     UNREFERENCED_PARAMETER(Context);
 
     ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
-    ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
-    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
 
     return (ULONG)Descriptor->Reference;
 }
@@ -512,7 +495,7 @@ __GnttabUnmap(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    UNREFERENCED_PARAMETER(Context);
+    ASSERT3U(Context->FrameCount, ==, 0);
 
     // Not clear what to do here
 }
@@ -548,12 +531,6 @@ GnttabDebugCallback(
           Context->DebugCallback,
           "FrameCount = %u\n",
           Context->FrameCount);
-
-    DEBUG(Printf,
-          Context->DebugInterface,
-          Context->DebugCallback,
-          "GetFailed = %u\n",
-          Context->GetFailed);
 }
                      
 NTSTATUS
@@ -595,13 +572,13 @@ GnttabInitialize(
 
     Info("grant_entry_v1_t *: %p\n", Context->Entry);
 
-    KeInitializeSpinLock(&Context->Lock);
+    status = RangeSetInitialize(&Context->RangeSet);
+    if (!NT_SUCCESS(status))
+        goto fail3;
 
     Context->CacheInterface = FdoGetCacheInterface(Fdo);
 
     CACHE(Acquire, Context->CacheInterface);
-
-    __GnttabFill(Context);
 
     Context->SuspendInterface = FdoGetSuspendInterface(Fdo);
 
@@ -614,7 +591,7 @@ GnttabInitialize(
                      Context,
                      &Context->SuspendCallbackEarly);
     if (!NT_SUCCESS(status))
-        goto fail3;
+        goto fail4;
 
     Context->DebugInterface = FdoGetDebugInterface(Fdo);
 
@@ -627,7 +604,7 @@ GnttabInitialize(
                    Context,
                    &Context->DebugCallback);
     if (!NT_SUCCESS(status))
-        goto fail4;
+        goto fail5;
 
     Interface->Context = Context;
     Interface->Operations = &Operations;
@@ -636,8 +613,8 @@ GnttabInitialize(
 
     return STATUS_SUCCESS;
 
-fail4:
-    Error("fail4\n");
+fail5:
+    Error("fail5\n");
 
     DEBUG(Release, Context->DebugInterface);
     Context->DebugInterface = NULL;
@@ -647,18 +624,19 @@ fail4:
             Context->SuspendCallbackEarly);
     Context->SuspendCallbackEarly = NULL;
 
-fail3:
-    Error("fail3\n");
+fail4:
+    Error("fail4\n");
 
     SUSPEND(Release, Context->SuspendInterface);
     Context->SuspendInterface = NULL;
 
-    __GnttabEmpty(Context);
-
     CACHE(Release, Context->CacheInterface);
     Context->CacheInterface = NULL;
 
-    RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
+    RangeSetTeardown(Context->RangeSet);
+
+fail3:
+    Error("fail3\n");
 
     Context->Entry = NULL;
 
@@ -667,7 +645,6 @@ fail2:
 
     __GnttabUnmap(Context);
 
-    Context->FrameCount = 0;
     Context->Pfn = 0;
 
     ASSERT(IsZeroMemory(Context, sizeof (XENBUS_GNTTAB_CONTEXT)));
@@ -706,18 +683,16 @@ GnttabTeardown(
     SUSPEND(Release, Context->SuspendInterface);
     Context->SuspendInterface = NULL;
 
-    __GnttabEmpty(Context);
-
     CACHE(Release, Context->CacheInterface);
     Context->CacheInterface = NULL;
 
-    RtlZeroMemory(&Context->Lock, sizeof (KSPIN_LOCK));
+    __GnttabShrink(Context);
+    RangeSetTeardown(Context->RangeSet);
 
     Context->Entry = NULL;
 
     __GnttabUnmap(Context);
 
-    Context->FrameCount = 0;
     Context->Pfn = 0;
 
     ASSERT(IsZeroMemory(Context, sizeof (XENBUS_GNTTAB_CONTEXT)));
