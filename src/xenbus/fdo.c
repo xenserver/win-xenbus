@@ -50,6 +50,7 @@
 #include "evtchn.h"
 #include "debug.h"
 #include "store.h"
+#include "cache.h"
 #include "gnttab.h"
 #include "suspend.h"
 #include "sync.h"
@@ -105,6 +106,7 @@ struct _XENBUS_FDO {
     XENBUS_EVTCHN_INTERFACE         EvtchnInterface;
     XENBUS_DEBUG_INTERFACE          DebugInterface;
     XENBUS_STORE_INTERFACE          StoreInterface;
+    XENBUS_CACHE_INTERFACE          CacheInterface;
     XENBUS_GNTTAB_INTERFACE         GnttabInterface;
 
     PXENBUS_EVTCHN_DESCRIPTOR       Evtchn;
@@ -1652,6 +1654,14 @@ FdoGetStoreInterface(
     return &Fdo->StoreInterface;
 }
 
+PXENBUS_CACHE_INTERFACE
+FdoGetCacheInterface(
+    IN  PXENBUS_FDO     Fdo
+    )
+{
+    return &Fdo->CacheInterface;
+}
+
 PXENBUS_GNTTAB_INTERFACE
 FdoGetGnttabInterface(
     IN  PXENBUS_FDO     Fdo
@@ -2098,9 +2108,13 @@ FdoS4ToS3(
     if (!NT_SUCCESS(status))
         goto fail5;
 
-    status = GnttabInitialize(Fdo, &Fdo->GnttabInterface);
+    status = CacheInitialize(Fdo, &Fdo->CacheInterface);
     if (!NT_SUCCESS(status))
         goto fail6;
+
+    status = GnttabInitialize(Fdo, &Fdo->GnttabInterface);
+    if (!NT_SUCCESS(status))
+        goto fail7;
 
     __FdoSetSystemPowerState(Fdo, PowerSystemSleeping3);
 
@@ -2112,6 +2126,11 @@ done:
     Trace("<====\n");
 
     return STATUS_SUCCESS;
+
+fail7:
+    Error("fail7\n");
+
+    CacheTeardown(&Fdo->CacheInterface);
 
 fail6:
     Error("fail6\n");
@@ -2164,6 +2183,8 @@ FdoS3ToS4(
     __FdoSetSystemPowerState(Fdo, PowerSystemHibernate);
 
     GnttabTeardown(&Fdo->GnttabInterface);
+
+    CacheTeardown(&Fdo->CacheInterface);
 
     StoreTeardown(&Fdo->StoreInterface);
 
