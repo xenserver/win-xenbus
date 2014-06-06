@@ -76,8 +76,6 @@ struct _XENBUS_CACHE {
     VOID            (*AcquireLock)(PVOID);
     VOID            (*ReleaseLock)(PVOID);
     PVOID           Argument;
-    KTIMER          Timer;
-    KDPC            Dpc;
     LIST_ENTRY      GetList;
     PLIST_ENTRY     PutList;
     CACHE_MAGAZINE  Magazine[MAXIMUM_PROCESSORS];
@@ -95,6 +93,8 @@ struct _XENBUS_CACHE_CONTEXT {
     PXENBUS_STORE_INTERFACE         StoreInterface;
     KSPIN_LOCK                      Lock;
     LIST_ENTRY                      List;
+    KTIMER                          Timer;
+    KDPC                            Dpc;
 };
 
 #define CACHE_TAG   'HCAC'
@@ -507,28 +507,40 @@ KDEFERRED_ROUTINE   CacheDpc;
 VOID
 CacheDpc(
     IN  PKDPC       Dpc,
-    IN  PVOID       Context,
+    IN  PVOID       _Context,
     IN  PVOID       Argument1,
     IN  PVOID       Argument2
     )
 {
-    PXENBUS_CACHE   Cache = Context;
-    LIST_ENTRY      List;
+    PXENBUS_CACHE_CONTEXT   Context = _Context;
+    PLIST_ENTRY             Entry;
+    KIRQL                   Irql;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Argument1);
     UNREFERENCED_PARAMETER(Argument2);
+    
+    ASSERT(Context != NULL);
 
-    ASSERT(Cache != NULL);
+    KeAcquireSpinLock(&Context->Lock, &Irql);
 
-    InitializeListHead(&List);
+    for (Entry = Context->List.Flink;
+         Entry != &Context->List;
+         Entry = Entry->Flink) {
+        PXENBUS_CACHE   Cache = CONTAINING_RECORD(Entry, XENBUS_CACHE, ListEntry);
+        LIST_ENTRY      List;
 
-    Cache->AcquireLock(Cache->Argument);
-    __CacheTrimShared(Cache, &List);
-    Cache->ReleaseLock(Cache->Argument);
+        InitializeListHead(&List);
 
-    __CacheEmpty(Cache, &List);
-    ASSERT(IsListEmpty(&List));
+        Cache->AcquireLock(Cache->Argument);
+        __CacheTrimShared(Cache, &List);
+        Cache->ReleaseLock(Cache->Argument);
+
+        __CacheEmpty(Cache, &List);
+        ASSERT(IsListEmpty(&List));
+    }
+
+    KeReleaseSpinLock(&Context->Lock, Irql);
 }
 
 static FORCEINLINE VOID
@@ -607,7 +619,6 @@ CacheCreate(
     OUT PXENBUS_CACHE           *Cache
     )
 {
-    LARGE_INTEGER               Timeout;
     LIST_ENTRY                  List;
     KIRQL                       Irql;
     NTSTATUS                    status;
@@ -654,18 +665,6 @@ CacheCreate(
     }
     (*Cache)->MaximumAllocated = (*Cache)->Allocated;
     (*Cache)->Reservation = (*Cache)->Population;
-
-    KeInitializeDpc(&(*Cache)->Dpc,
-                    CacheDpc,
-                    (*Cache));
-
-    Timeout.QuadPart = TIME_RELATIVE(TIME_MS(CACHE_PERIOD));
-
-    KeInitializeTimer(&(*Cache)->Timer);
-    KeSetTimerEx(&(*Cache)->Timer,
-                 Timeout,
-                 CACHE_PERIOD,
-                 &(*Cache)->Dpc);
 
     KeAcquireSpinLock(&Context->Lock, &Irql);
     InsertTailList(&Context->List, &(*Cache)->ListEntry);
@@ -728,12 +727,6 @@ CacheDestroy(
     KeReleaseSpinLock(&Context->Lock, Irql);
 
     RtlZeroMemory(&Cache->ListEntry, sizeof (LIST_ENTRY));
-
-    KeCancelTimer(&Cache->Timer);
-    KeFlushQueuedDpcs();
-
-    RtlZeroMemory(&Cache->Timer, sizeof (KTIMER));
-    RtlZeroMemory(&Cache->Dpc, sizeof (KDPC));
 
     Cache->Reservation = 0;
     Cache->MaximumAllocated = 0;
@@ -840,6 +833,7 @@ CacheInitialize(
 {
     PXENBUS_CACHE_CONTEXT       Context;
     NTSTATUS                    status;
+    LARGE_INTEGER               Timeout;
 
     Trace("====>\n");
 
@@ -868,6 +862,18 @@ CacheInitialize(
                    &Context->DebugCallback);
     if (!NT_SUCCESS(status))
         goto fail2;
+
+    KeInitializeDpc(&Context->Dpc,
+                    CacheDpc,
+                    Context);
+
+    Timeout.QuadPart = TIME_RELATIVE(TIME_MS(CACHE_PERIOD));
+
+    KeInitializeTimer(&Context->Timer);
+    KeSetTimerEx(&Context->Timer,
+                 Timeout,
+                 CACHE_PERIOD,
+                 &Context->Dpc);
 
     Interface->Context = Context;
     Interface->Operations = &Operations;
@@ -905,6 +911,12 @@ CacheTeardown(
     PXENBUS_CACHE_CONTEXT           Context = Interface->Context;
 
     Trace("====>\n");
+
+    KeCancelTimer(&Context->Timer);
+    KeFlushQueuedDpcs();
+
+    RtlZeroMemory(&Context->Timer, sizeof (KTIMER));
+    RtlZeroMemory(&Context->Dpc, sizeof (KDPC));
 
     if (!IsListEmpty(&Context->List))
         BUG("OUTSTANDING CACHES");
