@@ -70,7 +70,7 @@ struct _XENBUS_GNTTAB_DESCRIPTOR {
 struct _XENBUS_GNTTAB_CONTEXT {
     LONG                        References;
     PFN_NUMBER                  Pfn;
-    ULONG                       FrameCount;
+    LONG                        FrameIndex;
     grant_entry_v1_t            *Entry;
     PXENBUS_RANGE_SET           RangeSet;
     PXENBUS_CACHE_INTERFACE     CacheInterface;
@@ -103,13 +103,13 @@ __GnttabExpand(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    ULONG                       FrameIndex;
+    LONG                        FrameIndex;
     PFN_NUMBER                  Pfn;
     LONGLONG                    Start;
     LONGLONG                    End;
     NTSTATUS                    status;
 
-    FrameIndex = Context->FrameCount;
+    FrameIndex = InterlockedIncrement(&Context->FrameIndex);
 
     status = STATUS_INSUFFICIENT_RESOURCES;
     ASSERT3U(FrameIndex, <=, GNTTAB_MAXIMUM_FRAME_COUNT);
@@ -123,10 +123,8 @@ __GnttabExpand(
                                 FrameIndex);
     ASSERT(NT_SUCCESS(status));
 
-    Context->FrameCount++;    
-
     Start = __max(GNTTAB_RESERVED_ENTRY_COUNT, FrameIndex * GNTTAB_ENTRY_PER_FRAME);
-    End = (Context->FrameCount * GNTTAB_ENTRY_PER_FRAME) - 1;
+    End = ((FrameIndex + 1) * GNTTAB_ENTRY_PER_FRAME) - 1;
 
     Info("adding refrences [%08llx - %08llx]\n", Start, End);
 
@@ -148,7 +146,7 @@ __GnttabShrink(
     LONGLONG                    Entry;
 
     for (Entry = GNTTAB_RESERVED_ENTRY_COUNT;
-         Entry < (LONGLONG)(Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
+         Entry < (LONGLONG)((Context->FrameIndex + 1) * GNTTAB_ENTRY_PER_FRAME);
          Entry++) {
         NTSTATUS    status;
 
@@ -156,7 +154,7 @@ __GnttabShrink(
         ASSERT(NT_SUCCESS(status));
     }
 
-    Context->FrameCount = 0;
+    Context->FrameIndex = -1;
 }
 
 static NTSTATUS
@@ -388,7 +386,7 @@ GnttabRevokeForeignAccess(
 
     ASSERT3U(Descriptor->Magic, ==, GNTTAB_DESCRIPTOR_MAGIC);
     ASSERT3U(Descriptor->Reference, >=, GNTTAB_RESERVED_ENTRY_COUNT);
-    ASSERT3U(Descriptor->Reference, <, Context->FrameCount * GNTTAB_ENTRY_PER_FRAME);
+    ASSERT3U(Descriptor->Reference, <, (Context->FrameIndex + 1) * GNTTAB_ENTRY_PER_FRAME);
 
     Entry = &Context->Entry[Descriptor->Reference];
     Flags = (volatile SHORT *)&Entry->flags;
@@ -474,13 +472,13 @@ __GnttabMap(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    ULONG                       Index;
+    LONG                        Index;
     PFN_NUMBER                  Pfn;
     NTSTATUS                    status;
 
     Pfn = Context->Pfn;
 
-    for (Index = 0; Index < Context->FrameCount; Index++) {
+    for (Index = 0; Index <= Context->FrameIndex; Index++) {
         status = MemoryAddToPhysmap(Pfn,
                                     XENMAPSPACE_grant_table,
                                     Index);
@@ -495,7 +493,7 @@ __GnttabUnmap(
     IN  PXENBUS_GNTTAB_CONTEXT  Context
     )
 {
-    ASSERT3U(Context->FrameCount, ==, 0);
+    ASSERT3S(Context->FrameIndex, ==, -1);
 
     // Not clear what to do here
 }
@@ -529,8 +527,8 @@ GnttabDebugCallback(
     DEBUG(Printf,
           Context->DebugInterface,
           Context->DebugCallback,
-          "FrameCount = %u\n",
-          Context->FrameCount);
+          "FrameIndex = %d\n",
+          Context->FrameIndex);
 }
                      
 NTSTATUS
@@ -554,6 +552,7 @@ GnttabInitialize(
 
     Memory = FdoGetResource(Fdo, MEMORY_RESOURCE);
     Context->Pfn = (PFN_NUMBER)(Memory->Translated.u.Memory.Start.QuadPart >> PAGE_SHIFT);
+    Context->FrameIndex = -1;
 
     __GnttabMap(Context);
 
@@ -645,6 +644,8 @@ fail2:
 
     __GnttabUnmap(Context);
 
+    ASSERT3S(Context->FrameIndex, ==, -1);
+    Context->FrameIndex = 0;
     Context->Pfn = 0;
 
     ASSERT(IsZeroMemory(Context, sizeof (XENBUS_GNTTAB_CONTEXT)));
@@ -693,6 +694,8 @@ GnttabTeardown(
 
     __GnttabUnmap(Context);
 
+    ASSERT3S(Context->FrameIndex, ==, -1);
+    Context->FrameIndex = 0;
     Context->Pfn = 0;
 
     ASSERT(IsZeroMemory(Context, sizeof (XENBUS_GNTTAB_CONTEXT)));
