@@ -264,8 +264,10 @@ AddDevice(
 
     RtlZeroMemory(&Unicode, sizeof (UNICODE_STRING));
 
-    if (ActiveDevice == NULL)
+    if (ActiveDevice == NULL) {
+        Active = TRUE;
         goto done;
+    }
 
     status = __DriverQueryId(DeviceObject, BusQueryDeviceID, &DeviceID);
     if (!NT_SUCCESS(status))
