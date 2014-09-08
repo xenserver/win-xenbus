@@ -214,11 +214,10 @@ __UnplugDisks(
         status = RegistryQueryDwordValue(ServiceKey,
                                          "Count",
                                          &Count);
-        if (!NT_SUCCESS(status))
-            goto done;
-
-        if (Count == 0)
-            goto done;
+        if (NT_SUCCESS(status)) {
+            if (Count == 0)
+                goto done;
+        }
 
         RegistryCloseKey(ServiceKey);
         ServiceKey = NULL;
@@ -286,11 +285,10 @@ __UnplugNics(
         status = RegistryQueryDwordValue(ServiceKey,
                                          "Count",
                                          &Count);
-        if (!NT_SUCCESS(status))
-            goto done;
-
-        if (Count == 0)
-            goto done;
+        if (NT_SUCCESS(status)) {
+            if (Count == 0)
+                goto done;
+        }
 
         RegistryCloseKey(ServiceKey);
         ServiceKey = NULL;
