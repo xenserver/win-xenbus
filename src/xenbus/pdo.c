@@ -48,6 +48,7 @@
 #include "bus.h"
 #include "driver.h"
 #include "thread.h"
+#include "registry.h"
 #include "dbg_print.h"
 #include "assert.h"
 
@@ -64,6 +65,7 @@ struct _XENBUS_PDO {
     PIRP                        DevicePowerIrp;
 
     PXENBUS_FDO                 Fdo;
+    BOOLEAN                     Removable;
     BOOLEAN                     Missing;
     const CHAR                  *Reason;
 
@@ -1166,12 +1168,12 @@ PdoQueryCapabilities(
     Capabilities->DeviceD2 = 0;
     Capabilities->LockSupported = 0;
     Capabilities->EjectSupported = 0;
-    Capabilities->Removable = 1;
+    Capabilities->Removable = !!Pdo->Removable;
     Capabilities->DockDevice = 0;
     Capabilities->UniqueID = 1;
     Capabilities->SilentInstall = 1;
     Capabilities->RawDeviceOK = 0;
-    Capabilities->SurpriseRemovalOK = 1;
+    Capabilities->SurpriseRemovalOK = !!Pdo->Removable;
     Capabilities->HardwareDisabled = 0;
     Capabilities->NoDisplayInUI = 0;
 
@@ -2081,6 +2083,43 @@ PdoSuspend(
     UNREFERENCED_PARAMETER(Pdo);
 }
 
+static FORCEINLINE VOID
+__PdoReadRegistryFlags(
+    IN  PXENBUS_PDO     Pdo
+    )
+{
+    HANDLE              ParametersKey;
+    HANDLE              Key;
+    ULONG               Value;
+    NTSTATUS            status;
+
+    ParametersKey = DriverGetParametersKey();
+    if (ParametersKey == NULL)
+        goto fail1;
+
+    status = RegistryOpenSubKey(ParametersKey,
+                                __PdoGetName(Pdo),
+                                KEY_READ,
+                                &Key);
+    if (!NT_SUCCESS(status))
+        goto fail2;
+
+    status = RegistryQueryDwordValue(Key,
+                                     "Removable",
+                                     &Value);
+    if (!NT_SUCCESS(status))
+        Value = 1;
+
+    Pdo->Removable = !!Value;
+
+    RegistryCloseKey(Key);
+    return;
+
+fail2:
+fail1:
+    Pdo->Removable = TRUE;
+}
+
 NTSTATUS
 PdoCreate(
     IN  PXENBUS_FDO     Fdo,
@@ -2130,6 +2169,7 @@ PdoCreate(
         goto fail4;
 
     __PdoSetName(Pdo, Name);
+    __PdoReadRegistryFlags(Pdo);
 
     status = BusInitialize(Pdo, &Pdo->BusInterface);
     if (!NT_SUCCESS(status))
@@ -2148,6 +2188,8 @@ PdoCreate(
 
 fail5:
     Error("fail5\n");
+
+    Pdo->Removable = FALSE;
 
     ThreadAlert(Pdo->DevicePowerThread);
     ThreadJoin(Pdo->DevicePowerThread);
@@ -2203,6 +2245,8 @@ PdoDestroy(
     Dx->Pdo = NULL;
 
     BusTeardown(&Pdo->BusInterface);
+
+    Pdo->Removable = FALSE;
 
     ThreadAlert(Pdo->DevicePowerThread);
     ThreadJoin(Pdo->DevicePowerThread);
