@@ -45,8 +45,8 @@
 #define GNTTAB_ENTRY_PER_FRAME      (PAGE_SIZE / sizeof (grant_entry_v1_t))
 
 // Xen requires that we avoid the first 8 entries of the table and
-// we also reserve 1 entry for the crash kernel
-#define GNTTAB_RESERVED_ENTRY_COUNT 9
+// we also reserve extra entries for the crash kernel
+#define GNTTAB_RESERVED_ENTRY_COUNT 32
 
 #define GNTTAB_DESCRIPTOR_MAGIC 'DTNG'
 
