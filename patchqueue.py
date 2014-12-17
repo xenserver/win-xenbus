@@ -30,7 +30,7 @@
 
 baserepo = "git://hg.uk.xensource.com/closed/windows/xenbits/win-xenbus.git"
 
-basetag = "13ed2b82417b70ecc793dfa9cfd1f42543fa7a0e"
+basetag = "1f0f88dc7295852d614eaf5b55be44a5e9499047"
 
 package = "xenbus"
 
